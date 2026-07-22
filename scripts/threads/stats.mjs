@@ -73,7 +73,7 @@ const rows = await pool(entries, CONCURRENCY, async (e, i) => {
 });
 rows.sort((a, b) => publishMs(b) - publishMs(a));
 
-const HEAD = ['제목', '날짜', '조회수', '좋아요', '댓글', '리포스트'];
+const HEAD = ['title', 'date', 'views', 'likes', 'comments', 'reposts'];
 const lines = [`| ${HEAD.join(' | ')} |`, `| ${HEAD.map(() => '---').join(' | ')} |`];
 let tv = 0, tl = 0, tr = 0, trp = 0;
 for (const r of rows) {
@@ -81,5 +81,5 @@ for (const r of rows) {
   tv += r.views; tl += r.likes; tr += r.replies; trp += r.reposts;
   lines.push(`| ${r.title} | ${r.date} | ${r.views} | ${r.likes} | ${r.replies} | ${r.reposts} |`);
 }
-lines.push(`| 합계 | | ${tv} | ${tl} | ${tr} | ${trp} |`);
+lines.push(`| Total | | ${tv} | ${tl} | ${tr} | ${trp} |`);
 console.log(lines.join('\n'));

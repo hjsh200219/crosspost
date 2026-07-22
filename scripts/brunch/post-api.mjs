@@ -28,6 +28,7 @@ import { execFileSync } from 'child_process';
 import os from 'os';
 import path from 'path';
 import { loadEnv, dataPath, cdpPort } from '../lib/env.mjs';
+import { linkText } from '../lib/canonical-link.mjs';
 
 loadEnv();
 
@@ -376,11 +377,11 @@ if (imagePath) {
 if (resolvedUrl) {
   await page.keyboard.press('Enter');
   await page.keyboard.press('Enter');
-  await page.locator('div.wrap_body').evaluate((el, url) => {
+  await page.locator('div.wrap_body').evaluate((el, { label, url }) => {
     el.focus();
     const esc = (s) => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    document.execCommand('insertHTML', false, `원문: <a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`);
-  }, resolvedUrl);
+    document.execCommand('insertHTML', false, `${esc(label)}: <a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`);
+  }, { label: linkText(), url: resolvedUrl });
 }
 await page.waitForTimeout(800);
 

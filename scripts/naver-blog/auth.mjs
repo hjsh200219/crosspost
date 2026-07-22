@@ -39,7 +39,7 @@ const codePromise = new Promise((resolve, reject) => {
       || (code && recvState !== state ? 'state mismatch (CSRF protection)' : null);
     const ok = code && !err;
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(`<h2>${ok ? '네이버 인증 완료. 창을 닫아도 됩니다.' : 'OAuth 실패: ' + err}</h2>`);
+    res.end(`<h2>${ok ? 'Naver auth complete — you can close this tab.' : 'OAuth failed: ' + err}</h2>`);
     server.close();
     ok ? resolve(code) : reject(new Error('oauth: ' + err));
   });
