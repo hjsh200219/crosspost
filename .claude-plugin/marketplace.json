@@ -1,0 +1,14 @@
+{
+  "name": "crosspost",
+  "owner": {
+    "name": "SH Consulting",
+    "url": "https://github.com/hjsh200219"
+  },
+  "plugins": [
+    {
+      "name": "crosspost",
+      "source": "./",
+      "description": "Write once, publish everywhere: cross-post a single canonical post to LinkedIn, Facebook, Threads, X, Remember, Brunch, and Naver Blog — with per-channel body variants, unified stats, and edit/delete support."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Never commit user state or secrets
+.env
+*.env
+node_modules/
+published*.json
+queue.json
+*-cache.json
+browser-profile/
+profile/
+posts/
+*.log
+.DS_Store
+.omc/

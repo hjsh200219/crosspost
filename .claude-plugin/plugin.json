@@ -1,0 +1,25 @@
+{
+  "name": "crosspost",
+  "version": "0.1.0",
+  "description": "Write once, publish everywhere: cross-post a single canonical post to LinkedIn, Facebook, Threads, X, Remember, Brunch, and Naver Blog — with per-channel body variants, unified stats, and edit/delete support.",
+  "author": {
+    "name": "SH Consulting",
+    "url": "https://github.com/hjsh200219"
+  },
+  "homepage": "https://github.com/hjsh200219/crosspost",
+  "license": "MIT",
+  "category": "productivity",
+  "keywords": [
+    "publish",
+    "cross-post",
+    "linkedin",
+    "facebook",
+    "threads",
+    "x",
+    "brunch",
+    "naver-blog",
+    "remember",
+    "social-media",
+    "stats"
+  ]
+}

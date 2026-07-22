@@ -1,0 +1,12 @@
+{
+  "name": "crosspost-plugin",
+  "private": true,
+  "type": "module",
+  "description": "Claude Code plugin: cross-post one canonical post to 7 channels (LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog)",
+  "scripts": {
+    "browser": "bash scripts/lib/launch-browser.sh"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}
