@@ -18,11 +18,11 @@ import { loadEnv, dataPath } from '../lib/env.mjs';
 loadEnv();
 
 const BLOG_ID = process.env.NAVER_BLOG_ID;
-if (!BLOG_ID) { console.error('NAVER_BLOG_ID 가 설정되지 않았습니다 (.env).'); process.exit(1); }
+if (!BLOG_ID) { console.error('NAVER_BLOG_ID not set in $CROSSPOST_HOME/.env'); process.exit(1); }
 const DRY = process.argv.includes('--dry');
 const argTopics = process.argv.slice(2).filter((a) => a !== '--dry');
 const TOPICS = argTopics.length ? argTopics : (process.env.NAVER_BLOG_CATEGORIES || '').split(',').map((s) => s.trim()).filter(Boolean);
-if (!TOPICS.length) { console.error('usage: add-categories.mjs "카테고리1" "카테고리2" ... (or set NAVER_BLOG_CATEGORIES)'); process.exit(1); }
+if (!TOPICS.length) { console.error('usage: add-categories.mjs "category1" "category2" ... (or set NAVER_BLOG_CATEGORIES)'); process.exit(1); }
 
 const { browser, ctx } = await connect();
 const page = await acquirePage(ctx);
@@ -79,11 +79,11 @@ try {
 
   await page.screenshot({ path: dataPath('tmp/naver-cat-before-save.png'), fullPage: true });
   console.log('screenshot: naver-cat-before-save.png');
-  if (DRY) { console.log('--dry: NOT saving (확인 skipped)'); process.exit(0); }
+  if (DRY) { console.log('--dry: NOT saving (확인/confirm click skipped)'); process.exit(0); }
 
   await frame.locator('#submit_button').click();
   await page.waitForTimeout(4000);
-  console.log('saved (확인 clicked).');
+  console.log('saved (확인/confirm button clicked).');
 } catch (e) {
   console.error('error:', e.message);
   await page.screenshot({ path: dataPath('tmp/naver-cat-err.png') }).catch(() => {});

@@ -82,7 +82,7 @@ export async function captureCookieViaCDP(port = cdpPort()) {
   const { chromium } = await import('playwright');
   let browser;
   try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true }); }
-  catch { throw new Error(`CDP 브라우저 미기동 (:${port}) — npm run browser 로 카카오 로그인 세션 띄운 뒤 재시도.`); }
+  catch { throw new Error(`CDP browser not running (:${port}) — start it with \`npm run browser\`, log into Kakao, then retry.`); }
   try {
     const ctx = browser.contexts()[0];
     const page = ctx.pages()[0] || (await ctx.newPage());
@@ -108,16 +108,16 @@ export async function captureCookieViaCDP(port = cdpPort()) {
         cookie = cks.map((c) => `${c.name}=${c.value}`).join('; ');
       } catch (e) {
         if (e.code === 'KAKAO_2FA') {
-          throw new Error('Kakao 2FA/기기인증 필요 — npm run browser → 카카오 재로그인(폰 승인).');
+          throw new Error('Kakao 2FA/device verification required — `npm run browser` and re-login to Kakao (approve on phone).');
         }
         // NO_CREDS / NO_CDP / other → fall through to the human-login error below.
       }
     }
     if (!cookie || !/\bbid=/.test(cookie)) {
-      throw new Error('브런치 세션 쿠키 없음 — 카카오 로그인 필요 (npm run browser → 카카오 로그인).');
+      throw new Error('no Brunch session cookie — Kakao login required (npm run browser → log into Kakao).');
     }
     if (!(await fetchMe(cookie))) {
-      throw new Error('브런치 세션 재발급 실패 (Kakao SSO 만료 추정) — npm run browser → 카카오 재로그인.');
+      throw new Error('Brunch session re-mint failed (Kakao SSO likely expired) — npm run browser → re-login to Kakao.');
     }
     return cookie;
   } finally {
@@ -190,7 +190,7 @@ export async function openBrunch({ envPath, port = cdpPort() } = {}) {
   const { chromium } = await import('playwright');
   let browser;
   try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true }); }
-  catch { throw new Error(`CDP 브라우저 미기동 (:${port}) — npm run browser 로 카카오 로그인 세션 띄운 뒤 재시도.`); }
+  catch { throw new Error(`CDP browser not running (:${port}) — start it with \`npm run browser\`, log into Kakao, then retry.`); }
   try {
     const ctx = browser.contexts()[0];
     const page = ctx.pages().find((p) => p.url().includes('brunch.co.kr')) || (await ctx.newPage());
@@ -206,13 +206,13 @@ export async function openBrunch({ envPath, port = cdpPort() } = {}) {
         me = await remintAndProbe(page);
       } catch (e) {
         if (e.code === 'KAKAO_2FA') {
-          throw new Error('Kakao 2FA/기기인증 필요 — npm run browser → 카카오 재로그인(폰 승인).');
+          throw new Error('Kakao 2FA/device verification required — `npm run browser` and re-login to Kakao (approve on phone).');
         }
         // NO_CREDS / NO_CDP / other → fall through to the human-login error below.
       }
     }
     if (!me?.userId) {
-      throw new Error('브런치 세션 인증 실패 — npm run browser → 카카오 재로그인.');
+      throw new Error('Brunch session auth failed — npm run browser → re-login to Kakao.');
     }
     return { me, src: 'cdp', get: (url) => pageGet(page, url), close: async () => { await browser.close(); } };
   } catch (e) {

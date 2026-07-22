@@ -42,7 +42,7 @@ async function fetchViews(ctx, logNos, endDate) {
 
 const LEDGER = dataPath('ledgers/published-naver.json');
 const BLOG_ID = process.env.NAVER_BLOG_ID;
-if (!BLOG_ID) { console.error('NAVER_BLOG_ID 가 설정되지 않았습니다 (.env).'); process.exit(1); }
+if (!BLOG_ID) { console.error('NAVER_BLOG_ID not set in $CROSSPOST_HOME/.env'); process.exit(1); }
 const argv = process.argv.slice(2);
 const dateIdx = argv.indexOf('--date');
 // The cv API returns a trailing ~15-day daily window ending at startDate; summing it
@@ -58,7 +58,7 @@ const ledger = existsSync(LEDGER) ? JSON.parse(readFileSync(LEDGER, 'utf8')) : [
 let posts = (only ? ledger.filter((e) => e.logNo === only) : ledger)
   .sort((a, b) => publishMs(b) - publishMs(a));
 if (!only && LIMIT > 0) posts = posts.slice(0, LIMIT);
-if (!posts.length) { console.log('no ledger posts (published-naver.json 비어있음).'); process.exit(0); }
+if (!posts.length) { console.log('no ledger posts (published-naver.json is empty).'); process.exit(0); }
 
 const { browser, ctx } = await connect();
 const views = await fetchViews(ctx, posts.map((p) => p.logNo), viewDate); // { logNo: views }
@@ -94,17 +94,17 @@ try {
     }, { blogId: BLOG_ID, logNo: p.logNo });
     const v = views[p.logNo];
     rows.push({ title: p.title || p.slug, date: p.date || '', category: p.category || '', views: v, likes: m.likes, comments: m.comments });
-    console.log(`  ${p.logNo}  조회 ${v ?? '—'} · 공감 ${m.likes} · 댓글 ${m.comments}  ${(p.title || p.slug).slice(0, 26)}`);
+    console.log(`  ${p.logNo}  views ${v ?? '—'} · likes ${m.likes} · comments ${m.comments}  ${(p.title || p.slug).slice(0, 26)}`);
   }
 } finally { await releasePage(page); await browser.close().catch(() => {}); }
 
 // markdown table (date desc)
-console.log(`\n조회수 기준일: ${viewDate} (네이버 통계는 일 단위 확정, 당일분은 익일 반영)\n`);
-console.log('| 제목 | 날짜 | 게시판 | 조회 | 공감 | 댓글 |');
+console.log(`\nview-count basis date: ${viewDate} (Naver stats finalize daily; same-day figures reflect the next day)\n`);
+console.log('| title | date | board | views | likes | comments |');
 console.log('| --- | --- | --- | --: | --: | --: |');
 let V = 0, L = 0, C = 0;
 for (const r of rows) {
   L += r.likes; C += r.comments; V += (r.views || 0);
   console.log(`| ${r.title.slice(0, 30)} | ${r.date} | ${r.category} | ${r.views ?? '—'} | ${r.likes} | ${r.comments} |`);
 }
-console.log(`| **합계 (${rows.length})** | | | **${V}** | **${L}** | **${C}** |`);
+console.log(`| **Total (${rows.length})** | | | **${V}** | **${L}** | **${C}** |`);

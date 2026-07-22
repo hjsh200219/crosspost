@@ -17,7 +17,7 @@ const METRICS = ['views', 'likes', 'replies', 'reposts', 'quotes'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TOKEN = process.env.THREADS_ACCESS_TOKEN;
-if (!TOKEN) { console.error('THREADS_ACCESS_TOKEN 가 .env에 없습니다.'); process.exit(1); }
+if (!TOKEN) { console.error('THREADS_ACCESS_TOKEN missing in $CROSSPOST_HOME/.env'); process.exit(1); }
 
 async function insights(rootId) {
   const qs = new URLSearchParams({ metric: METRICS.join(','), access_token: TOKEN });
@@ -54,7 +54,7 @@ async function pool(items, n, worker) {
 }
 
 const ledger = existsSync(LEDGER) ? JSON.parse(readFileSync(LEDGER, 'utf8')) : [];
-if (!ledger.length) { console.log('장부가 비어 있습니다 (published-threads.json).'); process.exit(0); }
+if (!ledger.length) { console.log('ledger is empty (published-threads.json).'); process.exit(0); }
 
 let entries = ledger.map((e) => ({ ...e, _date: dateKey(e.file) || e.date || '' }));
 entries.sort((a, b) => publishMs(b) - publishMs(a));

@@ -25,7 +25,7 @@ loadEnv();
 
 const LEDGER = dataPath('ledgers/published-naver.json');
 const BLOG_ID = process.env.NAVER_BLOG_ID;
-if (!BLOG_ID) { console.error('NAVER_BLOG_ID 가 설정되지 않았습니다 (.env).'); process.exit(1); }
+if (!BLOG_ID) { console.error('NAVER_BLOG_ID not set in $CROSSPOST_HOME/.env'); process.exit(1); }
 const DEFAULT_CATEGORY = '게시판';
 
 const argv = process.argv.slice(2);
@@ -221,7 +221,7 @@ async function doDelete(logNo) {
     await page.waitForTimeout(4000);
     const fr = page.frames().find((f) => /PostView/i.test(f.url())) || page.mainFrame();
     const has = await fr.evaluate(() => !!document.querySelector('a._deletePost')).catch(() => false);
-    if (!has) throw new Error(`삭제 링크 없음 (logNo ${logNo}: 소유자 아님 / 이미 삭제 / 미존재)`);
+    if (!has) throw new Error(`delete link not found (logNo ${logNo}: not the owner / already deleted / does not exist)`);
     await fr.evaluate(() => document.querySelector('a._deletePost').click());
     await page.waitForTimeout(4000);
     // verify: reloading a deleted post fires the "삭제되었거나" alert
@@ -230,7 +230,7 @@ async function doDelete(logNo) {
     const gone = deletedAlert || new RegExp(`/${BLOG_ID}$|blog\\.naver\\.com/?$`).test(page.url());
     const l = readLedger().filter((e) => e.logNo !== logNo);
     writeFileSync(LEDGER, JSON.stringify(l, null, 2) + '\n');
-    console.log(gone ? `DELETED ${logNo} (확인됨)` : `삭제 클릭 완료 ${logNo} (블로그에서 확인 권장)`);
+    console.log(gone ? `DELETED ${logNo} (verified)` : `delete clicked for ${logNo} (verify on the blog recommended)`);
   });
 }
 

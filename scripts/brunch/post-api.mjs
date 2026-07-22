@@ -263,7 +263,7 @@ if (editArticleNo) {
   const lines = raw.split('\n');
   const title = lines[0].trim();
   if (title.length > 30) {
-    console.error(`title exceeds Brunch's 30-char limit (${title.length}자): "${title}"`);
+    console.error(`title exceeds Brunch's 30-char limit (${title.length} chars): "${title}"`);
     await browser.close();
     process.exit(1);
   }
@@ -271,7 +271,7 @@ if (editArticleNo) {
   const restParagraphs = rest.split(/\n\s*\n/).filter(Boolean);
   const subTitle = restParagraphs[0].split('\n')[0].trim();
   if (subTitle.length > 40) {
-    console.error(`subtitle (body's first line) exceeds Brunch's 40-char limit (${subTitle.length}자): "${subTitle}"`);
+    console.error(`subtitle (body's first line) exceeds Brunch's 40-char limit (${subTitle.length} chars): "${subTitle}"`);
     await browser.close();
     process.exit(1);
   }
@@ -313,7 +313,7 @@ const title = lines[0].trim();
 // limit, the 발행 click silently no-ops (no error dialog, no keyword panel, nothing),
 // which just times out waiting for a UI step that will never appear. Fail fast instead.
 if (title.length > 30) {
-  console.error(`title exceeds Brunch's 30-char limit (${title.length}자): "${title}"`);
+  console.error(`title exceeds Brunch's 30-char limit (${title.length} chars): "${title}"`);
   console.error('shorten the first line of the input file and retry.');
   process.exit(1);
 }
@@ -324,7 +324,7 @@ const subTitle = restParagraphs[0].split('\n')[0].trim();
 // derived from the body's first line, so this is a content-authoring constraint, not
 // something fixable here; fail fast with a clear message instead of a silent timeout.
 if (subTitle.length > 40) {
-  console.error(`subtitle (body's first line) exceeds Brunch's 40-char limit (${subTitle.length}자): "${subTitle}"`);
+  console.error(`subtitle (body's first line) exceeds Brunch's 40-char limit (${subTitle.length} chars): "${subTitle}"`);
   console.error('shorten the first paragraph of the input file and retry.');
   process.exit(1);
 }

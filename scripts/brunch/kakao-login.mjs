@@ -22,12 +22,12 @@ const TWOFA_RE = /인증번호|인증 번호|2단계|카카오톡으로 인증|�
 export async function loginViaKakao(port = cdpPort(), { verbose = false } = {}) {
   const id = process.env.KAKAO_ID;
   const pw = process.env.KAKAO_PW;
-  if (!id || !pw) throw Object.assign(new Error('KAKAO_ID/KAKAO_PW 미설정 ($CROSSPOST_HOME/.env)'), { code: 'NO_CREDS' });
+  if (!id || !pw) throw Object.assign(new Error('KAKAO_ID/KAKAO_PW not set ($CROSSPOST_HOME/.env)'), { code: 'NO_CREDS' });
 
   const { chromium } = await import('playwright');
   let browser;
   try { browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { noDefaults: true }); }
-  catch { throw Object.assign(new Error(`CDP 브라우저 미기동 (:${port})`), { code: 'NO_CDP' }); }
+  catch { throw Object.assign(new Error(`CDP browser not running (:${port})`), { code: 'NO_CDP' }); }
 
   const log = (...a) => { if (verbose) console.error(...a); };
   try {
@@ -74,7 +74,7 @@ export async function loginViaKakao(port = cdpPort(), { verbose = false } = {}) 
       const bodyTxt = (await page.evaluate(() => document.body?.innerText || '').catch(() => '')) || '';
 
       if (TWOFA_RE.test(bodyTxt)) {
-        throw Object.assign(new Error('Kakao 2FA/기기인증 화면 — 사람 승인 필요'), { code: 'KAKAO_2FA' });
+        throw Object.assign(new Error('Kakao 2FA/device-verification screen — human approval required'), { code: 'KAKAO_2FA' });
       }
       // "다른 기기에서 로그인" / 새 기기 등록 / scope 동의 → click the primary continue button.
       const btn = await page.$(
@@ -88,7 +88,7 @@ export async function loginViaKakao(port = cdpPort(), { verbose = false } = {}) 
     }
 
     if (await hasBid(ctx)) return 'LOGGED_IN';
-    throw Object.assign(new Error('로그인 완주 실패 (bid 미발급)'), { code: 'NO_BID' });
+    throw Object.assign(new Error('login did not complete (no bid cookie issued)'), { code: 'NO_BID' });
   } finally {
     await browser.close();
   }

@@ -37,7 +37,7 @@ export async function refreshAccessToken() {
   const clientSecret = env('NAVER_BLOG_CLIENT_SECRET');
   const refreshToken = env('NAVER_BLOG_REFRESH_TOKEN');
   if (!clientId || !clientSecret || !refreshToken)
-    throw new Error('갱신에 필요한 값이 .env에 없습니다 (NAVER_BLOG_CLIENT_ID/SECRET/REFRESH_TOKEN) — node auth.mjs 재실행 필요');
+    throw new Error('values required for refresh missing in .env (NAVER_BLOG_CLIENT_ID/SECRET/REFRESH_TOKEN) — re-run node auth.mjs');
   const qs = new URLSearchParams({
     grant_type: 'refresh_token', client_id: clientId,
     client_secret: clientSecret, refresh_token: refreshToken,
@@ -45,7 +45,7 @@ export async function refreshAccessToken() {
   const res = await fetch(`${TOKEN_URL}?${qs}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error || !data.access_token)
-    throw new Error(`토큰 갱신 실패 (${data.error || res.status}: ${data.error_description || ''}) — node auth.mjs 재실행 필요`);
+    throw new Error(`token refresh failed (${data.error || res.status}: ${data.error_description || ''}) — re-run node auth.mjs`);
   upsertEnv('NAVER_BLOG_ACCESS_TOKEN', data.access_token);
   upsertEnv('NAVER_BLOG_TOKEN_EXPIRES', String(Math.floor(Date.now() / 1000) + Number(data.expires_in || 0)));
   if (data.refresh_token) upsertEnv('NAVER_BLOG_REFRESH_TOKEN', data.refresh_token);
@@ -58,7 +58,7 @@ export async function getAccessToken() {
   const expires = Number(env('NAVER_BLOG_TOKEN_EXPIRES') || 0);
   if (!token) {
     if (env('NAVER_BLOG_REFRESH_TOKEN')) return refreshAccessToken();
-    throw new Error('NAVER_BLOG_ACCESS_TOKEN 이 .env에 없습니다 — node auth.mjs 실행 필요');
+    throw new Error('NAVER_BLOG_ACCESS_TOKEN missing in .env — run node auth.mjs first');
   }
   if (expires && Math.floor(Date.now() / 1000) >= expires - SKEW) return refreshAccessToken();
   return token;

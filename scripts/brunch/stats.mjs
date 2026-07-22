@@ -30,7 +30,7 @@ if (!existsSync(LEDGER)) { console.error('no published-brunch.json ledger — no
 let ledger = JSON.parse(readFileSync(LEDGER, 'utf8'));
 ledger = ledger.filter((e) => e.articleNo && e.status === 'publish').sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
 if (limit > 0) ledger = ledger.slice(0, limit);
-if (!ledger.length) { console.log('발행된 글 없음'); process.exit(0); }
+if (!ledger.length) { console.log('no published posts'); process.exit(0); }
 
 // --- auth: env browserless fast path → in-page CDP fetch (see cookie.mjs openBrunch) ---
 // Brunch's API authenticates only from a live brunch.co.kr document, so every call below
@@ -38,7 +38,7 @@ if (!ledger.length) { console.log('발행된 글 없음'); process.exit(0); }
 // CDP in-page path). client.get returns { status, text } regardless of path.
 let client;
 try { client = await openBrunch({ envPath: ENV_PATH, port: PORT }); }
-catch (e) { console.error(`브런치 세션 실패 — ${e.message}`); process.exit(2); }
+catch (e) { console.error(`Brunch session failed — ${e.message}`); process.exit(2); }
 const me = client.me;
 console.error(`cookie src: ${client.src === 'env' ? 'env (browserless)' : 'cdp (in-page)'}`);
 
@@ -107,13 +107,13 @@ const totals = rows.reduce((a, r) => ({
   view: a.view + (r.view || 0), likes: a.likes + (r.likes || 0), comment: a.comment + (r.comment || 0), share: a.share + (r.share || 0),
 }), { view: 0, likes: 0, comment: 0, share: 0 });
 
-console.log('| 제목 | 날짜 | 조회 | 좋아요 | 댓글 | 공유 |');
+console.log('| title | date | views | likes | comments | shares |');
 console.log('|---|---|--:|--:|--:|--:|');
 for (const r of rows) {
   const title = r.title.length > 30 ? r.title.slice(0, 30) + '…' : r.title;
   const mark = r.unranked ? '*' : '';
   console.log(`| ${title}${mark} | ${r.date ?? ''} | ${r.view} | ${r.likes ?? '?'} | ${r.comment} | ${r.share} |`);
 }
-console.log(`| **합계** | | **${totals.view}** | **${totals.likes}** | **${totals.comment}** | **${totals.share}** |`);
-if (deletedCount) console.log(`\n(장부상 ${deletedCount}건은 삭제/비live로 확인돼 제외)`);
-if (rows.some((r) => r.unranked)) console.log('(* = 신규글이 브런치 랭킹 API에 아직 미반영 → 조회 0 표시. 좋아요는 SSR로 즉시 반영되나 조회는 보통 하루 내 인덱싱됨. 페이지는 라이브)');
+console.log(`| **Total** | | **${totals.view}** | **${totals.likes}** | **${totals.comment}** | **${totals.share}** |`);
+if (deletedCount) console.log(`\n(${deletedCount} ledger entries confirmed deleted/not-live — excluded)`);
+if (rows.some((r) => r.unranked)) console.log('(* = new post not yet reflected in the Brunch ranking API → views shown as 0. Likes are reflected immediately via SSR, but views are usually indexed within a day. The page is live.)');

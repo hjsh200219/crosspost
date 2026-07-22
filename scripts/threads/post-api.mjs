@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
 import { loadEnv, dataPath } from '../lib/env.mjs';
 import { resolveImage } from '../lib/post-image.mjs';
+import { canonicalLink, slugFromFile } from '../lib/canonical-link.mjs';
 
 loadEnv();
 
@@ -23,25 +24,14 @@ const LEDGER = dataPath('ledgers/published-threads.json');
 const GRAPH = 'https://graph.threads.net/v1.0';
 const LINK_TEXT = process.env.CROSSPOST_LINK_TEXT || 'Read the full article';
 const LIMIT = 480; // 500 hard cap, 480 safety margin
-const CANONICAL_BASE_URL = process.env.CANONICAL_BASE_URL;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const TOKEN = process.env.THREADS_ACCESS_TOKEN;
 const USER_ID = process.env.THREADS_USER_ID;
 
-// Post files are named `YYYY-MM-DD_<slug>.txt`; the canonical article's slug
-// equals that <slug>. Trailer link logic is skipped entirely when
-// CANONICAL_BASE_URL is unset.
-function slugFromFile(file) {
-  const m = path.basename(String(file)).match(/^\d{4}-\d{2}-\d{2}_(.+)\.txt$/);
-  return m ? m[1] : null;
-}
-
-function canonicalLink(file) {
-  if (!CANONICAL_BASE_URL) return null;
-  const slug = slugFromFile(file);
-  return slug ? `${CANONICAL_BASE_URL}/insights/${slug}` : null;
-}
+// canonicalLink/slugFromFile come from ../lib/canonical-link.mjs so every channel
+// builds the same trailer URL (`${CANONICAL_BASE_URL}/<slug>`) and skips the
+// trailer entirely when CANONICAL_BASE_URL is unset.
 
 // --- chunking: paragraph-first greedy pack, sentence split, then whitespace hard-split ---
 function splitLong(text) {
@@ -137,7 +127,7 @@ async function deletePost(id) {
     // 500 "does not have permission for this action" ⇒ 토큰에 threads_delete 스코프 없음.
     // (400 not-found의 "missing permissions"와 구분 — 그건 스코프 문제 아님.)
     const hint = /does not have permission for this action/i.test(text)
-      ? ' — threads_delete 스코프 필요(생성기 토큰엔 없음; 커스텀 OAuth로 재발급)'
+      ? ' — threads_delete scope required (generator token doesn\'t have it; re-issue via custom OAuth)'
       : '';
     throw new Error(`delete ${res.status}: ${text.slice(0, 200)}${hint}`);
   }
@@ -176,14 +166,14 @@ async function backfillLinks() {
       ids.push(newId);
       e.ids = ids;
       writeFileSync(LEDGER, JSON.stringify(list, null, 2) + '\n'); // persist per-item (crash-safe)
-      console.log(`${e.slug}: 링크 트레일러 추가 ${newId} → ${link}`);
+      console.log(`${e.slug}: link trailer added ${newId} → ${link}`);
       fixed++;
       await sleep(1500);
     } catch (err) {
-      console.error(`${e.slug}: 링크 추가 실패 ${err.message}`);
+      console.error(`${e.slug}: failed to add link ${err.message}`);
     }
   }
-  console.log(`backfill 완료: 추가 ${fixed} · 스킵(이미有/공백) ${skipped} · 정본없음 ${nolink}`);
+  console.log(`backfill complete: added ${fixed} · skipped (existing/blank) ${skipped} · no canonical ${nolink}`);
 }
 
 // Threads-optimized body variant `<name>.threads.txt`, or null. Mirrors the
@@ -201,7 +191,7 @@ function threadsVariantPath(file) {
 async function publishFile(file, ids, imageUrl) {
   const variant = threadsVariantPath(file);
   const bodySrc = variant && existsSync(variant) ? variant : file;
-  if (bodySrc !== file) console.log(`  ↳ Threads 학습·실용 변형 본문 사용: ${path.basename(bodySrc)}`);
+  if (bodySrc !== file) console.log(`  ↳ using Threads variant body: ${path.basename(bodySrc)}`);
   const text = readFileSync(bodySrc, 'utf8').trim();
   if (!text) throw new Error('empty file');
   const chunks = chunkText(text);
@@ -219,10 +209,10 @@ async function publishFile(file, ids, imageUrl) {
     await sleep(1500);
     ids.push(await publishOne({ text: LINK_TEXT, replyToId, linkAttachment: link }));
   } else {
-    console.warn(`${file}: 대응 정본 글 없음 → 링크 포스트 건너뜀`);
+    console.warn(`${file}: no matching canonical post — skipping link post`);
   }
   recordPublish({ file, slug: slugFromFile(file), rootId: ids[0], ids });
-  console.log(`${file}: published (${chunks.length}조각${link ? '+링크' : ''}) root=${ids[0]}`);
+  console.log(`${file}: published (${chunks.length} chunks${link ? '+link' : ''}) root=${ids[0]}`);
 }
 
 // --- run ---
@@ -234,7 +224,7 @@ let IMAGE_URL = null;
   if (i >= 0) { IMAGE_URL = argv[i + 1]; argv = [...argv.slice(0, i), ...argv.slice(i + 2)]; }
 }
 if (!TOKEN || !USER_ID) {
-  console.error('THREADS_ACCESS_TOKEN / THREADS_USER_ID 가 .env에 없습니다.');
+  console.error('THREADS_ACCESS_TOKEN / THREADS_USER_ID missing in $CROSSPOST_HOME/.env');
   process.exit(1);
 }
 
@@ -259,15 +249,15 @@ if (argv[0] === '--delete') {
       // 자동 이미지 best-effort: webp 거부·URL 미배포로 루트가 막혔고(아직 아무것도 발행 안 됨)
       // 이미지가 자동해석분이면 텍스트-only로 1회 재시도해 발행 자체를 살린다.
       if (imgUrl && !IMAGE_URL && ids.length === 0) {
-        console.error(`  auto-image 실패 → 텍스트로 재발행: ${e.message}`);
+        console.error(`  auto-image failed — republishing as text: ${e.message}`);
         try { await publishFile(f, ids, null); }
         catch (e2) {
           console.error(`${f}: FAILED ${e2.message}`);
-          if (ids.length) console.error(`  이미 발행된 조각(수동 --delete 필요): ${ids.join(', ')}`);
+          if (ids.length) console.error(`  already-published chunks (manual --delete needed): ${ids.join(', ')}`);
         }
       } else {
         console.error(`${f}: FAILED ${e.message}`);
-        if (ids.length) console.error(`  이미 발행된 조각(수동 --delete 필요): ${ids.join(', ')}`);
+        if (ids.length) console.error(`  already-published chunks (manual --delete needed): ${ids.join(', ')}`);
       }
     }
     await sleep(1500);
