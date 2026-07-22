@@ -233,6 +233,13 @@ if (argv[0] === '--delete') {
   if (!id) { console.error('usage: post-api.mjs --delete <thread-id>'); process.exit(1); }
   await deletePost(id);
   console.log(`deleted: ${id}`);
+} else if (argv[0] === '--reply') {
+  // Add a single reply to an existing post (non-destructive). Use e.g. to attach a source after the fact.
+  const id = argv[1];
+  const text = argv[2];
+  if (!id || !text) { console.error('usage: post-api.mjs --reply <thread-id> "<text>"'); process.exit(1); }
+  const rid = await publishOne({ text, replyToId: id });
+  console.log(`replied: ${rid}`);
 } else if (argv[0] === '--backfill-links') {
   await backfillLinks();
 } else if (argv.length) {

@@ -102,6 +102,15 @@ Attribution is mandatory:
 
 Draft one post on the given topic in the user's voice.
 
+**Source (mandatory when the post makes factual claims).** If the post states any specific
+factual claim — a company announcement, an event, a statistic, a third-party quote, news —
+you must cite the source. Pure opinion, perspective, or the user's own build log needs none.
+When a factual claim is present, add one line at the end of the body of the canonical `.txt`
+(and the `.en.txt` sibling), before the link trailer:
+`Source: <disclosing party> & reporting (<outlet>, <YYYY-MM-DD>)`. The `.x.txt` teaser may omit
+it when the character budget is tight (the canonical link stands in). This applies to branch **A**
+(YouTube) too whenever the video rests on a factual claim, not just topic drafts.
+
 ---
 
 ## 3. Writing the post

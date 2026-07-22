@@ -275,6 +275,11 @@ if (args[0] === '--preview') { // check the teaser without publishing: node post
   deleteTweet(args[1]).then((d) => { console.log('deleted', args[1], d); process.exit(0); }).catch((e) => { console.error(e.message); process.exit(1); });
 } else if (args[0] === '--edit') {
   editPost(args[1], args[2], IMAGE).then(() => process.exit(0)).catch((e) => { console.error(e.message); process.exit(1); });
+} else if (args[0] === '--reply') { // Add a single reply to an existing tweet (non-destructive): node post-api.mjs --reply <tweet-id> "<text>"
+  const id = args[1];
+  const text = args[2];
+  if (!id || !text) { console.error('usage: node post-api.mjs --reply <tweet-id> "<text>"'); process.exit(1); }
+  postTweet(text, id, null).then((r) => { console.log('replied', r); process.exit(0); }).catch((e) => { console.error(e.message); process.exit(1); });
 } else if (files.length) {
   (async () => {
     const done = new Set(loadLedger().map((e) => e.file));
@@ -305,6 +310,6 @@ if (args[0] === '--preview') { // check the teaser without publishing: node post
     }
   })();
 } else {
-  console.error('Usage: node post-api.mjs <file.txt> [...] [--image PATH] [--skip-done] [--delay <sec>] [--max <N>] | --edit <id> <file> | --delete <id>');
+  console.error('Usage: node post-api.mjs <file.txt> [...] [--image PATH] [--skip-done] [--delay <sec>] [--max <N>] | --edit <id> <file> | --reply <id> "<text>" | --delete <id>');
   process.exit(1);
 }
