@@ -115,8 +115,14 @@ pick, rather than guessing one. Add a trailing instruction to steer any of them 
 2026-07-22_my-post.x.txt         # X uses this instead (short teaser)
 2026-07-22_my-post.threads.txt   # Threads uses this
 2026-07-22_my-post.en.txt        # appended as an English block on long-form channels
+2026-07-22_my-post.tags          # Naver Blog tags (comma/newline separated)
 2026-07-22_my-post.png           # sibling image → auto-attached where supported
 ```
+
+Naver Blog is the only channel with tags. Spaces and special characters are stripped before
+entry — Naver treats a space as a tag separator, and a rejected character silently drops every
+tag after it — so `AI 법률 상담` publishes as `AI법률상담`, which is also the form people
+search on. Override per run with `--tags "a,b,c"`.
 
 **Edit / delete** (per channel, from the plugin's `scripts/<channel>/`):
 

@@ -142,11 +142,24 @@ resolve from the canonical file:
 | `<slug>.x.txt` | X | `.x.txt` → `.threads.txt` → canonical |
 | `<slug>.threads.txt` | Threads | `.threads.txt` → canonical |
 | `<slug>.en.txt` | long-form channels (LinkedIn, Facebook, Remember, Naver) | appended after the canonical body as an English translation block |
+| `<slug>.tags` | Naver Blog | comma- or newline-separated tags; `--tags "a,b,c"` overrides |
 
 Write a variant only when a channel's format warrants it (e.g. a short X teaser, a casual
 Threads version). If absent, the channel uses the canonical body. A `<slug>.en.txt` sibling,
 when present, is merged below the canonical body (divider + English text) rather than
 replacing it — delete the sibling if you don't want the bilingual layout.
+
+**Naver tags.** Naver Blog is the only channel with a tag field. Put 5–10 search terms in
+`<slug>.tags` (or pass `--tags "a,b,c"`); the publisher enters the first 10. Two silent
+failure modes are handled for you, but they explain why tags come out looking "joined":
+
+- **A space is a separator.** `AI 법률 상담` would be stored as three tags and the keywords
+  after it get dropped — so spaces are stripped and it becomes `AI법률상담`.
+- **A special character is rejected and takes the tags after it with it.** Entering `yt-dlp`
+  silently swallowed the following tag — so only Hangul and alphanumerics survive.
+
+Joined-up forms are also what people actually search on Naver. The publish log prints
+`tags: N entered → N committed`; a `*** MISMATCH ***` there means the editor dropped some.
 
 ---
 

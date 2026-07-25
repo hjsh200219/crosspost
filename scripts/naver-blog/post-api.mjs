@@ -8,6 +8,7 @@
 //   node post-api.mjs --delete <logNo>          # delete a post
 //   node post-api.mjs <file> --dry               # fill + screenshot, do not publish
 //   node post-api.mjs <file> --image <path>     # attach a local image as the cover
+//   node post-api.mjs <file> --tags "a,b,c"     # Naver tags (else a sibling <base>.tags file)
 //
 // <file> is a plain-text post: first line = title, rest = body (blank-line separated
 // paragraphs; a paragraph starting with "## " renders as a SE-ONE 소제목 heading). When
@@ -114,7 +115,74 @@ async function dismissDraftAlert() {
   await page.keyboard.press('Escape').catch(() => {});
   await page.waitForTimeout(400);
 }
-async function publishPopup(category) {
+// ---------- tags ----------
+// Naver tags come from `--tags "a,b,c"` or a sibling `<basename>.tags` file
+// (comma- or newline-separated), same sibling convention as the cover image.
+//
+// Two silent failure modes, both verified against the live editor (2026-07-25):
+//   * A space acts as a SEPARATOR — "AI 법률 상담" is stored as three tags
+//     (AI / 법률 / 상담) and trailing keywords get dropped.
+//   * A special character is REJECTED and takes the tags after it with it —
+//     entering `yt-dlp` silently swallowed the following `vibecoding`.
+// So we keep Hangul and alphanumerics only, and verify by counting the chips
+// the editor actually committed.
+const MAX_TAGS = 10;
+function toTags(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of list || []) {
+    const t = String(raw).replace(/[^가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9]/g, '').slice(0, 30);
+    const key = t.toLowerCase();
+    if (!t || seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
+}
+function resolveTags(file, cliTags) {
+  if (cliTags) return toTags(cliTags.split(','));
+  const sib = file.replace(/\.\w+$/, '') + '.tags';
+  if (existsSync(sib)) return toTags(readFileSync(sib, 'utf8').split(/[,\n]/));
+  return [];
+}
+const chipCount = () => frame.evaluate(() => {
+  const a = document.querySelector('[class*="tag_area"],[class*="tag_textarea"]');
+  return a ? a.querySelectorAll('span[class*="text__"]').length : -1;
+}).catch(() => -1);
+// Existing tags are cleared first so re-publishing an edited post doesn't accumulate.
+async function clearTags() {
+  let n = await chipCount();
+  for (let i = 0; n > 0 && i < 40; i++) {
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(180);
+    const next = await chipCount();
+    if (next === n) break;
+    n = next;
+  }
+}
+async function fillTags(tags) {
+  if (!tags.length) return 0;
+  const input = frame.locator('input[class*="tag_input__"]').first();
+  if (!(await input.count().catch(() => 0))) { console.error('  tag input not found — skipping tags'); return 0; }
+  await input.click({ timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  if ((await chipCount()) > 0) await clearTags();
+  for (const t of tags) {
+    await input.type(t, { delay: 12 });
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    // A rejected tag leaves text behind and would merge into the next one.
+    const left = await input.inputValue().catch(() => '');
+    if (left) { await input.fill('').catch(() => {}); await page.waitForTimeout(150); }
+  }
+  const n = await chipCount();
+  console.log(`  tags: ${tags.length} entered → ${n} committed${n === tags.length ? '' : '  *** MISMATCH ***'}: ${tags.join(', ')}`);
+  return n;
+}
+
+async function publishPopup(category, tags) {
   await frame.locator('button[class*="publish_btn__"]').first().click();
   await page.waitForTimeout(2500);
   // category select
@@ -122,6 +190,7 @@ async function publishPopup(category) {
   await page.waitForTimeout(800);
   await frame.locator(`text="${category}"`).last().click({ timeout: 5000 });
   await page.waitForTimeout(600);
+  await fillTags(tags || []);
 }
 function logNoFromUrl(u) { const m = u.match(/blog\.naver\.com\/[^/]+\/(\d+)/) || u.match(/logNo=(\d+)/); return m ? m[1] : null; }
 
@@ -136,7 +205,7 @@ async function withBrowser(fn) {
   finally { await releasePage(page); await browser.close().catch(() => {}); }
 }
 
-async function doPublish(file, categoryOverride, imageOverride) {
+async function doPublish(file, categoryOverride, imageOverride, tagsOverride) {
   const post = loadPost(file);
   const slug = slugFromFile(file) || file;
   const category = categoryOverride || DEFAULT_CATEGORY;
@@ -157,7 +226,7 @@ async function doPublish(file, categoryOverride, imageOverride) {
     await page.waitForTimeout(300);
     await renderBody(post.body, image, canonicalUrl);
     await page.screenshot({ path: dataPath('tmp/naver-post-filled.png'), fullPage: true });
-    await publishPopup(category);
+    await publishPopup(category, resolveTags(file, tagsOverride));
     if (DRY) { console.log('--dry: not publishing'); return; }
     await frame.locator('button[class*="confirm_btn__"]').first().click();
     await page.waitForTimeout(6000);
@@ -167,7 +236,7 @@ async function doPublish(file, categoryOverride, imageOverride) {
   });
 }
 
-async function doEdit(logNo, file, categoryOverride, imageOverride) {
+async function doEdit(logNo, file, categoryOverride, imageOverride, tagsOverride) {
   const post = loadPost(file);
   const slug = slugFromFile(file) || file;
   const category = categoryOverride || DEFAULT_CATEGORY;
@@ -198,7 +267,7 @@ async function doEdit(logNo, file, categoryOverride, imageOverride) {
     console.log('  body components after clear:', await frame.evaluate(() => document.querySelectorAll('.se-component').length));
     await renderBody(post.body, image, canonicalUrl);
     await page.screenshot({ path: dataPath('tmp/naver-edit-filled.png'), fullPage: true });
-    await publishPopup(category);
+    await publishPopup(category, resolveTags(file, tagsOverride));
     if (DRY) { console.log('--dry: not updating'); return; }
     await frame.locator('button[class*="confirm_btn__"]').first().click();
     await page.waitForTimeout(6000);
@@ -235,18 +304,18 @@ async function doDelete(logNo) {
 }
 
 // ---------- dispatch ----------
-const excludesValueOf = ['--category', '--image'];
+const excludesValueOf = ['--category', '--image', '--tags'];
 const editIdx = argv.indexOf('--edit');
 const delId = flag('--delete');
 if (editIdx !== -1) {
   const logNo = argv[editIdx + 1];
   const file = argv.filter((a, i) => !a.startsWith('--') && i !== editIdx + 1 && !(i > 0 && excludesValueOf.includes(argv[i - 1])))[0];
-  if (!logNo || !file) { console.error('usage: post-api.mjs --edit <logNo> <file> [--category "..."] [--image <path>]'); process.exit(1); }
-  await doEdit(logNo, file, flag('--category'), flag('--image'));
+  if (!logNo || !file) { console.error('usage: post-api.mjs --edit <logNo> <file> [--category "..."] [--image <path>] [--tags "a,b,c"]'); process.exit(1); }
+  await doEdit(logNo, file, flag('--category'), flag('--image'), flag('--tags'));
 } else if (delId) {
   await doDelete(delId);
 } else {
   const file = argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && excludesValueOf.includes(argv[i - 1])))[0];
-  if (!file) { console.error('usage: post-api.mjs <file> [--category "..."] [--image <path>] [--dry]'); process.exit(1); }
-  await doPublish(file, flag('--category'), flag('--image'));
+  if (!file) { console.error('usage: post-api.mjs <file> [--category "..."] [--image <path>] [--tags "a,b,c"] [--dry]'); process.exit(1); }
+  await doPublish(file, flag('--category'), flag('--image'), flag('--tags'));
 }
