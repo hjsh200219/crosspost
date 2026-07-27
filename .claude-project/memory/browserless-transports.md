@@ -23,6 +23,8 @@ created: 2026-07-27
 
 `$CROSSPOST_HOME/.env`의 `LINKEDIN_COOKIE`/`NAVER_COOKIE`에 영속(`scripts/lib/site-cookie.mjs`). **전 건 실패**일 때만 CDP에서 재캡처·재영속 후 1회 재시도한다 — 전 건 실패는 세션이 죽었다는 신호지만 한두 건 실패는 글 쪽 문제라, 같이 다루면 멀쩡한 세션을 매번 새로 캡처하게 된다.
 
+**`resolveCookie`의 `validate`는 env 쿠키뿐 아니라 갓 캡처한 쿠키에도 적용된다.** 그래서 재캡처를 강제하려고 `validate: async () => false`를 넘기면 CDP가 멀쩡한 쿠키를 가져와도 같은 콜백이 그걸 거부해 `captured cookie still fails auth`로 항상 throw한다 — self-heal이 통째로 죽고, 사용자에겐 "브라우저에서 다시 로그인하라"는 무의미한 안내만 나간다(재로그인해도 그대로). 죽은 값만 지목할 것: `validate: async (c) => c !== deadCookie` (2026-07-28 LinkedIn `stats-fast.mjs`에서 발견, 네이버 `stats.mjs` self-heal도 같은 패턴으로 신설).
+
 **Why:** "브라우저가 필요하다"는 대개 관찰이 아니라 **관성**이다. 매번 "이 벽이 서버에도 있나?"를 물어야 한다 — CORS처럼 브라우저에만 존재하는 벽이 흔하다.
 
 **How to apply:** 남은 브라우저 채널(브런치, Facebook 조회수)도 같은 질문을 다시 던져볼 것. 브런치는 이미 답이 나왔다 — [[brunch-server-side-impossible]].

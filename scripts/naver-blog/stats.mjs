@@ -51,7 +51,7 @@ let posts = (only ? ledger.filter((e) => e.logNo === only) : ledger)
 if (!only && LIMIT > 0) posts = posts.slice(0, LIMIT);
 if (!posts.length) { console.log('no ledger posts (published-naver.json is empty).'); process.exit(0); }
 
-const { cookie, src } = await resolveCookie({
+let { cookie, src } = await resolveCookie({
   key: 'NAVER_COOKIE', port: cdpPort(), chromium,
   origins: ['https://blog.naver.com', 'https://blog.stat.naver.com', 'https://naver.com'],
   names: COOKIE_NAMES,
@@ -118,11 +118,31 @@ async function mapPool(items, n, worker) {
   return out;
 }
 
-const rows = await mapPool(posts, CONCURRENCY, async (p) => {
+const statRows = () => mapPool(posts, CONCURRENCY, async (p) => {
   const [views, likes, comments] = await Promise.all([viewsOf(p.logNo), likesOf(p.logNo), commentsOf(p.logNo)]);
   console.error(`  ${p.logNo}  views ${views ?? '—'} · likes ${likes} · comments ${comments}  ${(p.title || p.slug).slice(0, 26)}`);
   return { title: p.title || p.slug, date: p.date || '', category: p.category || '', views, likes, comments };
 });
+
+let rows = await statRows();
+// 전 게시물 views가 null이면 개별 글 문제가 아니라 세션 쿠키 사망 신호다(소유자 통계
+// API는 인증 필수). env 쿠키였다면 CDP에서 한 번 재캡처해 재시도 — 죽은 값만 거부하고
+// 갓 캡처한 쿠키는 통과시킨다(linkedin stats-fast와 같은 계약).
+if (rows.length && rows.every((r) => r.views == null) && src === 'env') {
+  console.error('every post read no views → re-capturing the session cookie');
+  const dead = cookie;
+  try {
+    ({ cookie, src } = await resolveCookie({
+      key: 'NAVER_COOKIE', port: cdpPort(), chromium,
+      origins: ['https://blog.naver.com', 'https://blog.stat.naver.com', 'https://naver.com'],
+      names: COOKIE_NAMES,
+      validate: async (c) => c !== dead,
+    }));
+    rows = await statRows();
+  } catch (e) {
+    console.error(`cookie re-capture failed: ${e.message}`);
+  }
+}
 
 // markdown table (date desc)
 console.log(`\nview-count basis date: ${viewDate} (Naver stats finalize daily; same-day figures reflect the next day)\n`);

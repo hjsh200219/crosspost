@@ -48,7 +48,14 @@ if (!frames.length) {
 // Cut length from text volume. Reading speed, not aesthetics, sets the floor.
 const MIN = 1.8, MAX = 6.0;
 let spec = { cards: [] };
-try { spec = JSON.parse(readFileSync(dataPath(`cards/${slug}.json`), 'utf8')); } catch { /* fall back to a flat cadence */ }
+let specOk = false;
+try { spec = JSON.parse(readFileSync(dataPath(`cards/${slug}.json`), 'utf8')); specOk = true; } catch { /* fall back to a flat cadence */ }
+// spec이 있는데 프레임 수가 다르면 stale 프레임이 섞인 것 — 그대로 concat하면
+// 옛 콘텐츠가 reel.mp4에 영구히 박힌다(IG는 발행 후 미디어 교체 불가).
+if (specOk && Array.isArray(spec.cards) && spec.cards.length && spec.cards.length !== frames.length) {
+  console.error(`frame count (${frames.length}) != spec cards (${spec.cards.length}) — stale frames in ${BUILD.replace(home(), '$CROSSPOST_HOME')}; re-run: node gen-cards.mjs ${slug} --reels`);
+  process.exit(1);
+}
 const charsOf = (card) => JSON.stringify(card || {}).replace(/[^\p{L}\p{N}]/gu, '').length;
 const durations = frames.map((_, i) => {
   if (fixedSecs) return fixedSecs;

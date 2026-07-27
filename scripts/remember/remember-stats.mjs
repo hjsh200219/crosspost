@@ -37,6 +37,7 @@ function ledgerPosts() {
   if (!existsSync(LEDGER)) return [];
   const out = [];
   const seen = new Set(); // 장부 중복 게시(같은 글 재게시) 제거 — basename 기준
+  let bad = 0; // 읽기 전용 리포트라 중단하진 않지만, 조용히 행이 빠지면 안 된다
   for (const l of readFileSync(LEDGER, 'utf8').trim().split('\n').filter(Boolean)) {
     try {
       const { file, ts } = JSON.parse(l);
@@ -46,8 +47,9 @@ function ledgerPosts() {
       const fp = path.isAbsolute(file) ? file : path.resolve(file);
       const title = existsSync(fp) ? readFileSync(fp, 'utf8').split('\n')[0].trim() : base;
       out.push({ file, ts, title });
-    } catch {}
+    } catch { bad++; }
   }
+  if (bad) console.error(`warning: ${bad} unparseable ledger line(s) skipped — check ${LEDGER}`);
   return out;
 }
 

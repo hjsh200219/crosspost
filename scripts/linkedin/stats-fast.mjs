@@ -332,7 +332,9 @@ if (!allMode) {
       ({ cookie, src } = await resolveCookie({
         key: COOKIE_KEY, port: PORT, chromium,
         origins: ['https://www.linkedin.com'], names: COOKIE_NAMES,
-        validate: async () => false, // force a fresh CDP capture, ignore the stored value
+        // 죽은 env 쿠키만 거부한다. `() => false`로 두면 resolveCookie가 갓 캡처한
+        // 쿠키까지 같은 validate로 거부해 재캡처 경로가 항상 throw — self-heal이 죽는다.
+        validate: async (c) => c !== cookie,
       }));
       results = await run(cookie);
     } catch (e) {

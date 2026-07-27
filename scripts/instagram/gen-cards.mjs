@@ -27,7 +27,7 @@
  * If a card's content is taller than its box, this fails loudly instead of shipping a clipped
  * card that cannot be replaced after publishing.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
 import { loadEnv, home, dataPath } from '../lib/env.mjs';
@@ -149,10 +149,19 @@ const html = (card, i, n) => `<!doctype html><meta charset="utf-8"><style>
 </div>`;
 
 mkdirSync(OUT_DIR, { recursive: true });
+// 이전 렌더의 잔여 프레임 제거 — spec의 카드 수가 줄면 stale 프레임이 남고,
+// post-api는 디렉터리 글롭으로, gen-reel은 전체 concat으로 그걸 그대로 발행한다.
+// STEM 매칭 파일만 지운다(캐러셀 OUT_DIR엔 reel.mp4가 같이 있을 수 있다).
+for (const f of readdirSync(OUT_DIR).filter((n) => new RegExp(`^${STEM}-\\d+\\.jpg$`).test(n))) {
+  unlinkSync(join(OUT_DIR, f));
+}
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
 
-const written = [];
+// 스크린샷은 버퍼로만 캡처하고, 오버플로 판정이 끝난 뒤에야 OUT_DIR에 쓴다.
+// 잘린 렌더를 발행 디렉터리에 남기면 check-cards가 오버플로를 재측정하지 않아
+// 게이트를 통과하고, IG는 발행 후 교체가 불가라 영구다.
+const shots = [];
 const overflowed = [];
 for (const [i, card] of spec.cards.entries()) {
   await page.setContent(html(card, i, spec.cards.length), { waitUntil: 'load' });
@@ -162,21 +171,30 @@ for (const [i, card] of spec.cards.entries()) {
     return el.scrollHeight - el.clientHeight;
   });
   if (over > 2) overflowed.push(`card ${i + 1} overflows its box by ${over}px — shorten the text`);
-  const out = join(OUT_DIR, `${STEM}-${String(i + 1).padStart(2, '0')}.jpg`);
-  await page.screenshot({ path: out, type: 'jpeg', quality: 90 });
-  written.push(out);
-  console.log(`  ${out.replace(home(), '$CROSSPOST_HOME')}`);
+  shots.push({
+    name: `${STEM}-${String(i + 1).padStart(2, '0')}.jpg`,
+    buf: await page.screenshot({ type: 'jpeg', quality: 90 }),
+  });
 }
 await browser.close();
 
 if (overflowed.length) {
-  console.error('\nrendered, but these cards are clipped:');
+  const clipDir = join(home(), 'build', `${slug}-clipped`);
+  mkdirSync(clipDir, { recursive: true });
+  for (const s of shots) writeFileSync(join(clipDir, s.name), s.buf);
+  console.error('\nrendered, but these cards are clipped — nothing was written to the publish directory:');
   for (const o of overflowed) console.error(`  - ${o}`);
+  console.error(`clipped renders (inspection only): ${clipDir.replace(home(), '$CROSSPOST_HOME')}`);
   console.error('Instagram cannot replace media after publishing — fix the spec and re-render.');
   process.exit(1);
 }
 
-console.log(`\n${written.length} ${REELS ? 'reel frames' : 'cards'} written to ${OUT_DIR.replace(home(), '$CROSSPOST_HOME')}`);
+for (const s of shots) {
+  writeFileSync(join(OUT_DIR, s.name), s.buf);
+  console.log(`  ${join(OUT_DIR, s.name).replace(home(), '$CROSSPOST_HOME')}`);
+}
+
+console.log(`\n${shots.length} ${REELS ? 'reel frames' : 'cards'} written to ${OUT_DIR.replace(home(), '$CROSSPOST_HOME')}`);
 if (!REELS) {
   console.log('Publish that directory so Meta can fetch it, then set CROSSPOST_MEDIA_BASE_URL.');
 }

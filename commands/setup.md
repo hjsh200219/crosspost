@@ -38,7 +38,7 @@ Read `$CROSSPOST_HOME/.env` and note which channel variables already have values
 | Threads | `THREADS_ACCESS_TOKEN` |
 | X | `X_API_KEY` |
 | Remember | `REMEMBER_TOKEN` |
-| Brunch | `BRUNCH_COOKIE` |
+| Brunch | `BRUNCH_COOKIE` (optional — a logged-in `browser-profile/` also counts) |
 | Naver Blog | `NAVER_BLOG_ID` |
 | Instagram | `IG_USER_ID` + `IG_ACCESS_TOKEN` |
 

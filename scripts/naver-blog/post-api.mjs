@@ -239,18 +239,9 @@ async function doPublishHttp(file, categoryOverride, imageOverride, tagsOverride
   const tags = resolveTags(file, tagsOverride);
   const logNo = await publishDocument({ cookie, blogId: BLOG_ID, documentModel, categoryNo, tags, openType });
 
-  // verify by reading the document back — `isSuccess` alone is not proof it rendered
-  const expected = documentSignature(documentModel.document.components);
-  const live = await readDocument(cookie, BLOG_ID, logNo);
-  const actual = documentSignature(live);
-  if (!live || JSON.stringify(actual) !== JSON.stringify(expected)) {
-    throw new Error(
-      `publish verification failed (logNo ${logNo}): ` +
-      `expected ${JSON.stringify(expected).slice(0, 500)}, got ${live ? JSON.stringify(actual).slice(0, 500) : 'null'}`,
-    );
-  }
-
   const url = `https://blog.naver.com/${BLOG_ID}/${logNo}`;
+  // 발행은 logNo를 받은 순간 이미 라이브다. readback 검증보다 먼저 장부에 기록해야
+  // 검증 단계가 죽어도 라이브 글이 고아가 되지 않는다(--skip-done 재시도 중복 방지).
   // A private publish is a verification run — never touch the ledger, or it overwrites the
   // real post's logNo for this slug and every later stats/edit call follows the ghost.
   if (openType === 2) {
@@ -263,6 +254,17 @@ async function doPublishHttp(file, categoryOverride, imageOverride, tagsOverride
       date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()),
       publishedAt: new Date().toISOString(),
     });
+  }
+
+  // verify by reading the document back — `isSuccess` alone is not proof it rendered
+  const expected = documentSignature(documentModel.document.components);
+  const live = await readDocument(cookie, BLOG_ID, logNo);
+  const actual = documentSignature(live);
+  if (!live || JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `publish verification failed — the post IS live${openType === 2 ? ' and recorded in the ledger' : ''} (${url}): ` +
+      `expected ${JSON.stringify(expected).slice(0, 500)}, got ${live ? JSON.stringify(actual).slice(0, 500) : 'null'}`,
+    );
   }
   console.log(`PUBLISHED → ${url}  (${expected.length} components · ${tags.length} tags · cookie: ${src}${openType === 0 ? ' · private' : ''})`);
   return logNo;

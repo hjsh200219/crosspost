@@ -83,8 +83,23 @@ function nextGap() {
 
 function ledgerSet() {
   if (!existsSync(LEDGER)) return new Set();
-  return new Set(readFileSync(LEDGER, 'utf8').trim().split('\n').filter(Boolean)
-    .map((l) => { try { return JSON.parse(l).file; } catch { return null; } }).filter(Boolean));
+  // 깨진 줄을 조용히 버리면 손상된 장부가 빈 장부처럼 보여 --skip-done이
+  // 전량 재발행한다 — 브런치와 같은 fail-closed.
+  const out = new Set();
+  for (const line of readFileSync(LEDGER, 'utf8').trim().split('\n').filter(Boolean)) {
+    let entry;
+    try { entry = JSON.parse(line); } catch (error) {
+      console.error(`cannot read Remember ledger: ${line.slice(0, 60)} (${error.message})`);
+      process.exit(1);
+    }
+    if (typeof entry?.file !== 'string') {
+      console.error(`cannot read Remember ledger (no file field): ${line.slice(0, 60)}`);
+      process.exit(1);
+    }
+    // basename 기준 — 같은 파일을 상대/절대경로로 번갈아 불러도 중복 발행하지 않는다
+    out.add(path.basename(entry.file));
+  }
+  return out;
 }
 
 const ENV_PATH = path.join(home(), '.env');
@@ -188,6 +203,15 @@ async function editPost(auth, id, content) {
 }
 
 // --- run
+// --skip-done 판정은 자격증명·CDP 접근(getAuth)보다 먼저 한다 — 발행할 파일이
+// 하나도 없으면 토큰 없이 끝낸다 (다른 채널과 같은 워크플로 계약).
+const done = skipDone ? ledgerSet() : new Set();
+if (!deleteId && !editId && files.length && files.every((f) => done.has(path.basename(f)))) {
+  for (const f of files) console.log(`${f}: skip (already in ledger)`);
+  console.log(`done: ${files.length}/${files.length}`);
+  process.exit(0);
+}
+
 let auth, authSrc, cdpTried = false;
 if (!DRY) { const a = await getAuth(); auth = a.hdr; authSrc = a.src; console.log(`token src: ${a.src}${a.src === 'env' ? ' (browserless)' : ''}`); }
 
@@ -240,11 +264,10 @@ if (imagePath && !DRY) {
   }
 }
 
-const done = skipDone ? ledgerSet() : new Set();
 let ok = 0, published = 0;
 for (let i = 0; i < files.length; i++) {
   const file = files[i];
-  if (skipDone && done.has(file)) { console.log(`${file}: skip (already in ledger)`); ok++; continue; }
+  if (skipDone && done.has(path.basename(file))) { console.log(`${file}: skip (already in ledger)`); ok++; continue; }
   const fp = path.isAbsolute(file) ? file : path.resolve(file);
   if (!existsSync(fp)) { console.error(`${file}: FAILED - file not found`); continue; }
   let content = readFileSync(fp, 'utf8').trim();

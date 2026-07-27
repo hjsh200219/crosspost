@@ -41,7 +41,13 @@ if (explicit.length) {
 }
 if (!ids.length) { console.error('no posts (empty ledger, or pass ids)'); process.exit(0); }
 
-const j = async (url) => { const r = await fetch(url); return r.json(); };
+// Graph 오류 응답(400 + {error:{...}})이나 JSON 아닌 응답(HTML 오류 페이지)을
+// 0점짜리 정상 행으로 위장하지 않도록 error 객체로 표면화한다.
+const j = async (url) => {
+  const r = await fetch(url);
+  const text = await r.text();
+  try { return JSON.parse(text); } catch { return { error: { message: `HTTP ${r.status}: ${text.slice(0, 80)}` } }; }
+};
 const firstLine = (m) => (m || '').split('\n')[0].replace(/^"|"$/g, '').slice(0, 30);
 
 async function stat(id) {
@@ -50,6 +56,7 @@ async function stat(id) {
       `reactions.summary(total_count).limit(0),` +
       `comments.summary(total_count).limit(0),shares&access_token=${encodeURIComponent(TOKEN)}`,
   );
+  if (base.error) return { id, date: dateById.get(id) || '', error: base.error };
   return {
     id,
     title: firstLine(base.message),
@@ -68,10 +75,23 @@ const worker = async () => { for (let i = idx++; i < ids.length; i = idx++) rows
 await Promise.all(Array.from({ length: Math.min(CONCURRENCY, ids.length) }, worker));
 rows.sort((a, b) => (msById.get(b.id) ?? 0) - (msById.get(a.id) ?? 0));
 
+// 토큰이 죽으면(OAuthException 190) 모든 행이 쓰레기다 — 0으로 채운 표 대신 크게 실패한다.
+const tokenErr = rows.find((r) => r.error?.code === 190);
+if (tokenErr) {
+  console.error(`Facebook token invalid (error 190): ${tokenErr.error.message} — re-run get-page-token.mjs`);
+  process.exit(1);
+}
+
 console.log('| title | date | reach | likes | comments | shares |');
 console.log('| --- | --- | --: | --: | --: | --: |');
 let ti = 0, tr = 0, tc = 0, ts = 0;
 for (const r of rows) {
+  if (r.error) {
+    // 삭제된 게시물 등 — 0점 행으로 위장하지 않고 실패 행으로 보여주며 합계에서 제외
+    console.log(`| ${r.id} | ${r.date} | — | — | — | — |`);
+    console.error(`  ! ${r.id}: ${String(r.error.message || '').slice(0, 80)}`);
+    continue;
+  }
   ti += r.impressions || 0; tr += r.reactions; tc += r.comments; ts += r.shares;
   console.log(`| ${r.title} | ${r.date} | ${r.impressions ?? '—'} | ${r.reactions} | ${r.comments} | ${r.shares} |`);
 }

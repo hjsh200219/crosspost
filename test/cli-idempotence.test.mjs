@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { after, test } from 'node:test';
@@ -92,6 +92,121 @@ test('LinkedIn stats returns an empty result for a fresh ledger', () => {
   const result = run('scripts/linkedin/stats-fast.mjs', []);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /No LinkedIn posts yet/);
+});
+
+test('X --skip-done fails closed when its ledger is malformed', () => {
+  writeFileSync(join(ledgers, 'published-x.json'), '{not-json');
+  const result = run(
+    'scripts/x/post-api.mjs',
+    ['--skip-done', post],
+    {
+      X_API_KEY: 'k', X_API_SECRET: 's', X_ACCESS_TOKEN: 't', X_ACCESS_SECRET: 'ts',
+      MOCK_FETCH_STATUS: '500', MOCK_FETCH_BODY: '{}',
+    },
+    ['--import', join(repo, 'test-support/mock-fetch.mjs')],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot read X ledger/);
+  // fail-closed: 손상된 장부 파일은 덮어쓰지 않고 그대로 남는다
+  assert.equal(readFileSync(join(ledgers, 'published-x.json'), 'utf8'), '{not-json');
+});
+
+test('Remember --skip-done fails closed when its ledger is malformed', () => {
+  writeFileSync(join(ledgers, 'published-remember.jsonl'), '{not-json\n');
+  const result = run(
+    'scripts/remember/post-api.mjs',
+    ['--skip-done', post],
+    { DRY: '1' },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot read Remember ledger/);
+});
+
+test('LinkedIn --at stores an absolute file path for the scheduler', () => {
+  const queue = join(ledgers, 'queue-linkedin.json');
+  rmSync(queue, { force: true });
+  // scheduler.mjs가 자기 디렉터리로 chdir한 뒤 spawn하므로, 상대경로로 enqueue해도
+  // 큐에는 절대경로가 저장되어야 발행 시점 ENOENT가 나지 않는다.
+  const result = spawnSync(
+    process.execPath,
+    [join(repo, 'scripts/linkedin/post-api.mjs'), '--at', '2099-01-01 09:00', join('posts', basename(post))],
+    {
+      cwd: home,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CROSSPOST_HOME: home,
+        LINKEDIN_ACCESS_TOKEN: 'test',
+        LINKEDIN_PERSON_URN: 'urn:li:person:test',
+      },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const [entry] = JSON.parse(readFileSync(queue, 'utf8'));
+  assert.ok(isAbsolute(entry.file), `queued path is not absolute: ${entry.file}`);
+  assert.equal(basename(entry.file), basename(post));
+});
+
+test('Threads delete prunes the ledger only after the API confirms', () => {
+  const ledger = join(ledgers, 'published-threads.json');
+  writeFileSync(ledger, JSON.stringify([{ rootId: 'target', ids: ['target'] }, { rootId: 'keep', ids: ['keep'] }]));
+  const env = { THREADS_ACCESS_TOKEN: 'test', THREADS_USER_ID: 'test' };
+  const preload = ['--import', join(repo, 'test-support/mock-fetch.mjs')];
+
+  const failed = run(
+    'scripts/threads/post-api.mjs',
+    ['--delete', 'target'],
+    { ...env, MOCK_FETCH_STATUS: '500', MOCK_FETCH_BODY: '{"error":"denied"}' },
+    preload,
+  );
+  assert.notEqual(failed.status, 0);
+  assert.deepEqual(JSON.parse(readFileSync(ledger, 'utf8')).map((e) => e.rootId), ['target', 'keep']);
+
+  const succeeded = run(
+    'scripts/threads/post-api.mjs',
+    ['--delete', 'target'],
+    { ...env, MOCK_FETCH_STATUS: '200', MOCK_FETCH_BODY: '{"success":true}' },
+    preload,
+  );
+  assert.equal(succeeded.status, 0, succeeded.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(ledger, 'utf8')).map((e) => e.rootId), ['keep']);
+});
+
+test('Facebook stats surfaces Graph errors instead of zero rows', () => {
+  writeFileSync(
+    join(ledgers, 'published-facebook.json'),
+    JSON.stringify([{ id: 'dead', publishedAt: '2026-07-01T00:00:00.000Z' }]),
+  );
+  const result = run(
+    'scripts/facebook/stats.mjs',
+    [],
+    {
+      FACEBOOK_PAGE_ACCESS_TOKEN: 'token',
+      MOCK_FETCH_STATUS: '400',
+      MOCK_FETCH_BODY: '{"error":{"message":"denied","code":100}}',
+    },
+    ['--import', join(repo, 'test-support/mock-fetch.mjs')],
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /\| dead \|/);
+  assert.match(result.stdout, /— \| — \| — \| —/);
+  assert.match(result.stderr, /denied/);
+});
+
+test('Facebook stats fails loudly on an invalid token (error 190)', () => {
+  writeFileSync(join(ledgers, 'published-facebook.json'), JSON.stringify([{ id: 'dead' }]));
+  const result = run(
+    'scripts/facebook/stats.mjs',
+    [],
+    {
+      FACEBOOK_PAGE_ACCESS_TOKEN: 'token',
+      MOCK_FETCH_STATUS: '400',
+      MOCK_FETCH_BODY: '{"error":{"message":"Session expired","code":190}}',
+    },
+    ['--import', join(repo, 'test-support/mock-fetch.mjs')],
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /error 190/);
 });
 
 for (const channel of ['facebook', 'instagram']) {

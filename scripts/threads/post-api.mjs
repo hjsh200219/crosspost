@@ -236,6 +236,22 @@ if (argv[0] === '--delete') {
   if (!id) { console.error('usage: post-api.mjs --delete <thread-id>'); process.exit(1); }
   await deletePost(id);
   console.log(`deleted: ${id}`);
+  // 확인된 삭제만 장부에서 정리(FB/IG/X와 같은 계약) — 남겨두면 문서화된
+  // delete+재발행 흐름을 --skip-done이 "already published"로 영영 건너뛴다.
+  if (existsSync(LEDGER)) {
+    let list;
+    try {
+      list = JSON.parse(readFileSync(LEDGER, 'utf8'));
+    } catch (error) {
+      console.error(`deleted, but cannot read Threads ledger: ${error.message}`);
+      process.exit(1);
+    }
+    const kept = list.filter((e) => e.rootId !== id && !(e.ids || []).includes(id));
+    if (kept.length !== list.length) {
+      writeFileSync(LEDGER, JSON.stringify(kept, null, 2) + '\n');
+      console.log(`  ↳ ledger: removed ${list.length - kept.length} row(s)`);
+    }
+  }
 } else if (argv[0] === '--reply') {
   // Add a single reply to an existing post (non-destructive). Use e.g. to attach a source after the fact.
   const id = argv[1];

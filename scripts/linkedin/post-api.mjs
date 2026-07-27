@@ -13,7 +13,7 @@
 //                                          # queue for scheduled publish (local time, published by scheduler.mjs)
 //   node post-api.mjs --skip-done <file...> # skip files already in the ledger
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { dataPath } from '../lib/env.mjs';
 import { canonicalLink, linkText } from '../lib/canonical-link.mjs';
 import { readPostBody } from '../lib/post-body.mjs';
@@ -165,14 +165,17 @@ function enqueue(file, whenLocal, comment) {
   if (isNaN(localDate.getTime())) { console.error(`--at is not a valid date: "${whenLocal}"`); process.exit(1); }
   const when = localDate.toISOString();
   if (localDate <= new Date()) { console.error(`--at is in the past: ${when}`); process.exit(1); }
-  // No --comment given → auto first-comment with the canonical link (no link if CANONICAL_BASE_URL is unset)
-  const autoLink = canonicalLink(file);
-  const cmt = comment || (autoLink ? `${linkText()}: ${autoLink}` : null);
+  // 정본 링크 첫 댓글은 발행 시점에 post-api 파일 발행 경로가 스스로 단다. 여기서도
+  // 큐에 실으면 scheduler가 같은 댓글을 한 번 더 달아 이중 게시된다 — 큐에는
+  // 사용자가 명시한 --comment(추가 댓글)만 싣는다.
+  const cmt = comment || null;
   const q = existsSync(QUEUE) ? JSON.parse(readFileSync(QUEUE, 'utf8')) : [];
-  q.push({ file, when, account, ...(cmt ? { comment: cmt } : {}), queuedAt: new Date().toISOString(), attempts: 0 });
+  // 절대경로로 저장 — scheduler.mjs는 자기 디렉터리로 chdir한 뒤 post-api를 spawn하므로
+  // (cron의 cwd도 임의) 상대경로 항목은 발행 시점에 반드시 ENOENT가 난다.
+  q.push({ file: resolve(file), when, account, ...(cmt ? { comment: cmt } : {}), queuedAt: new Date().toISOString(), attempts: 0 });
   q.sort((a, b) => a.when.localeCompare(b.when));
   writeFileSync(QUEUE, JSON.stringify(q, null, 2) + '\n');
-  console.log(`queued: ${file} → ${when}${cmt ? ' (+first comment)' : ''}`);
+  console.log(`queued: ${file} → ${when}${cmt ? ' (+comment)' : ''}`);
 }
 
 let argv = ARGV; // --account/-a already stripped by parseAccount

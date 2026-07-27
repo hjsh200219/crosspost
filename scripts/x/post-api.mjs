@@ -90,16 +90,16 @@ function xWeight(text) {
 function trimToBudget(text, budget) {
   const t = text.trim();
   if (xWeight(t) <= budget) return { text: t, truncated: false };
-  // Walk paragraphs, then sentences, appending until the next one would exceed budget.
+  // Teaser는 훅(첫 문단)에서만 자른다. 첫 문장이 예산을 넘겨도 다음 문단으로 넘어가지
+  // 않는다 — 훅을 통째로 버리고 뒷문단으로 시작하는 teaser가 되기 때문. 그 경우는
+  // 아래 hard-cut이 첫 문장을 단어 경계에서 자른다.
   let buf = "";
-  for (const para of t.split(/\n\n+/)) {
-    for (const sent of para.split(/(?<=[.!?。！？…])\s+/)) {
-      const cand = buf ? `${buf} ${sent}` : sent;
-      if (xWeight(cand) > budget) { if (buf) return { text: buf, truncated: true }; break; }
-      buf = cand;
-    }
-    if (buf) return { text: buf, truncated: true }; // stop after the first paragraph — shorter teasers read better
+  for (const sent of t.split(/\n\n+/)[0].split(/(?<=[.!?。！？…])\s+/)) {
+    const cand = buf ? `${buf} ${sent}` : sent;
+    if (xWeight(cand) > budget) break;
+    buf = cand;
   }
+  if (buf) return { text: buf, truncated: true };
   // Even the first sentence overflows the budget → hard-cut on a word boundary.
   const ELLIPSIS = "…";
   let cut = "";
@@ -131,7 +131,17 @@ function readBody(file) {
   return readFileSync(src, 'utf8').trim();
 }
 
-function loadLedger() { try { return JSON.parse(readFileSync(LEDGER, 'utf8')); } catch { return []; } }
+// 손상된 장부는 빈 장부가 아니다 — 그대로 진행하면 --skip-done이 전량 재발행하고
+// saveLedger()가 복구 가능한 파일을 새 행들로 덮어쓴다. fail-closed.
+function loadLedger() {
+  if (!existsSync(LEDGER)) return [];
+  try {
+    return JSON.parse(readFileSync(LEDGER, 'utf8'));
+  } catch (error) {
+    console.error(`cannot read X ledger: ${error.message}`);
+    process.exit(1);
+  }
+}
 function saveLedger(l) { writeFileSync(LEDGER, JSON.stringify(l, null, 2) + '\n'); }
 
 // Classify a v2 error response (problem+json or legacy errors[]) into a human-readable message.

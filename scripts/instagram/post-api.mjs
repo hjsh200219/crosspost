@@ -225,17 +225,38 @@ if (REELS) {
 if (dryRun) { console.log('--dry-run — containers built, nothing published'); process.exit(0); }
 
 const pub = await post(`/${IG}/media_publish`, { creation_id: parent.id });
-const info = await get(`/${pub.id}`, 'id,permalink,media_type,timestamp');
-console.log(`published: ${info.permalink || pub.id}`);
 
-const ledger = readLedger();
-ledger.push({
+// media_publish가 성공한 순간 게시물은 라이브고 IG에선 되돌릴 수 없다. 장부 기록 전에
+// 다른 호출(permalink 조회)이 끼어들어 실패하면 라이브 게시물이 장부에 없어
+// --skip-done 재시도가 중복 발행한다 — 장부부터 쓰고 permalink는 best-effort로 채운다.
+const entry = {
   slug,
   format, // a slug can go out as both a carousel and a reel — stats need to tell the rows apart
   id: pub.id,
-  permalink: info.permalink || null,
+  permalink: null,
   items: REELS ? 1 : urls.length,
   date: new Intl.DateTimeFormat('en-CA').format(new Date()),
-});
+};
+let ledger;
+try {
+  ledger = readLedger();
+} catch (error) {
+  console.error(`cannot read Instagram ledger: ${error.message}`);
+  console.error('publish SUCCEEDED but was NOT recorded — repair the ledger, then append this entry manually:');
+  console.error(JSON.stringify(entry, null, 2));
+  process.exit(1);
+}
+ledger.push(entry);
 writeFileSync(LEDGER, JSON.stringify(ledger, null, 2) + '\n');
+
+try {
+  const info = await get(`/${pub.id}`, 'id,permalink,media_type,timestamp');
+  if (info.permalink) {
+    entry.permalink = info.permalink;
+    writeFileSync(LEDGER, JSON.stringify(ledger, null, 2) + '\n');
+  }
+} catch (error) {
+  console.error(`  warn: permalink lookup failed — post IS live and recorded in the ledger (id ${pub.id}): ${error.message}`);
+}
+console.log(`published: ${entry.permalink || pub.id}`);
 console.log(`ledger → ${LEDGER.replace(home(), '$CROSSPOST_HOME')}`);

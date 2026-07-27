@@ -175,7 +175,7 @@ env vars present in `$CROSSPOST_HOME/.env`:
 | Threads | `THREADS_ACCESS_TOKEN` (+ `THREADS_USER_ID`) | official Graph API — no browser |
 | X | `X_API_KEY` / `X_API_SECRET` / `X_ACCESS_TOKEN` / `X_ACCESS_SECRET` | official API v2 — no browser |
 | Remember | `REMEMBER_TOKEN` | unofficial API (experimental) — no browser |
-| Brunch | `BRUNCH_COOKIE` | browser session (CDP) |
+| Brunch | `BRUNCH_COOKIE` set, **or** a logged-in `$CROSSPOST_HOME/browser-profile/` directory (Kakao login via `npm run browser`) | browser session (CDP) |
 | Naver Blog | `NAVER_BLOG_ID` | session cookie — no browser (`--ui` falls back to the editor) |
 | Instagram | `IG_USER_ID` + `IG_ACCESS_TOKEN` (+ `CROSSPOST_MEDIA_BASE_URL`) | official Graph API — no browser, but **images are mandatory** |
 

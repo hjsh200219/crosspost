@@ -248,7 +248,20 @@ if (deleteId) {
   }, deleteId);
   console.log('delete', deleteId, JSON.stringify(res));
   await browser.close();
-  process.exit(res.status >= 200 && res.status < 300 ? 0 : 1);
+  const deleteOk = res.status >= 200 && res.status < 300;
+  // 확인된 삭제만 장부에서 정리(FB/IG/X와 같은 계약) — 남겨두면 --skip-done이
+  // 삭제된 글의 재발행을 "already published"로 영영 건너뛴다.
+  if (deleteOk && existsSync(LEDGER)) {
+    try {
+      const ledger = JSON.parse(readFileSync(LEDGER, 'utf8'))
+        .filter((entry) => String(entry.articleNo) !== String(deleteId));
+      writeFileSync(LEDGER, JSON.stringify(ledger, null, 2));
+    } catch (error) {
+      console.error(`deleted, but cannot prune Brunch ledger: ${error.message}`);
+      process.exit(1);
+    }
+  }
+  process.exit(deleteOk ? 0 : 1);
 }
 
 // login check
@@ -465,7 +478,18 @@ if (!articleNo) {
 
 const entry = { file: path.basename(file), status, articleNo, url: finalUrl, sourceUrl: resolvedUrl, date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()), ts: new Date().toISOString() };
 let ledger = [];
-if (existsSync(LEDGER)) { try { ledger = JSON.parse(readFileSync(LEDGER, 'utf8')); } catch {} }
+if (existsSync(LEDGER)) {
+  try {
+    ledger = JSON.parse(readFileSync(LEDGER, 'utf8'));
+  } catch (error) {
+    // 손상된 장부를 새 항목 1개짜리로 갈아엎으면 과거 발행 기록이 전부 사라지고
+    // --skip-done이 전량 재발행한다. 발행 자체는 이미 성공했으므로 기록만 수동 복구.
+    console.error(`cannot read Brunch ledger: ${error.message}`);
+    console.error('publish SUCCEEDED but was NOT recorded — repair the ledger, then append this entry manually:');
+    console.error(JSON.stringify(entry, null, 2));
+    process.exit(1);
+  }
+}
 ledger.push(entry);
 writeFileSync(LEDGER, JSON.stringify(ledger, null, 2));
 console.log('published, logged to', LEDGER);
