@@ -13,6 +13,7 @@
 //   node post-api.mjs --no-url <file>            # omit source-url line entirely
 //   node post-api.mjs --cover-color [1-10] <file> # colored cover instead of plain text
 //   node post-api.mjs --image <path> <file>       # upload an image into the body top
+//   node post-api.mjs --skip-done <file>          # skip files already recorded in the ledger
 //   node post-api.mjs --delete <articleNo>       # delete a published/draft article
 //   node post-api.mjs --edit <articleNo> <file>  # edit an existing article IN-PLACE (같은 articleNo)
 //        (검증됨 2026-07-11: /write 에디터 → GET/DELETE /v1/article/temp/{id} → POST /v1/article/{id}.
@@ -47,11 +48,13 @@ let deleteId = null;
 let editArticleNo = null; // --edit <articleNo>: replace an existing article's body + re-publish
 let coverColor = null; // 1-10, null = plain cover_text (no background)
 let imagePath = null; // --image <path>: uploaded into the body top via Froala's file input
+let skipDone = false;
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--status') { status = argv[++i]; continue; }
   if (argv[i] === '--url') { sourceUrl = argv[++i]; continue; }
   if (argv[i] === '--no-url') { sourceUrl = null; continue; }
   if (argv[i] === '--image') { imagePath = argv[++i]; continue; }
+  if (argv[i] === '--skip-done') { skipDone = true; continue; }
   if (argv[i] === '--delete') { deleteId = argv[++i]; continue; }
   if (argv[i] === '--edit') { editArticleNo = argv[++i]; continue; }
   if (argv[i] === '--cover-color') {
@@ -81,10 +84,21 @@ if (editArticleNo && file && !existsSync(file)) {
   process.exit(1);
 }
 if (!deleteId && !file) {
-  console.error('usage: node post-api.mjs [--status draft|publish] [--url <url>|--no-url] <file>');
+  console.error('usage: node post-api.mjs [--skip-done] [--status draft|publish] [--url <url>|--no-url] <file>');
   console.error('       node post-api.mjs --delete <articleNo>');
   console.error('       node post-api.mjs --edit <articleNo> <file>');
   process.exit(1);
+}
+if (skipDone && file && !editArticleNo) {
+  let ledger = [];
+  if (existsSync(LEDGER)) {
+    try { ledger = JSON.parse(readFileSync(LEDGER, 'utf8')); } catch {}
+  }
+  const base = path.basename(file);
+  if (ledger.some((entry) => path.basename(entry.file || '') === base)) {
+    console.log(`${base}: skip (already published)`);
+    process.exit(0);
+  }
 }
 
 // Slug from the input filename — same convention the other channel scripts use for

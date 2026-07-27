@@ -11,6 +11,7 @@ posts/
 *.log
 .DS_Store
 .omc/
+_workspace/
 
 # local-only handoff backups (git history already keeps generations)
 .claude-project/HANDOFF.md.prev*

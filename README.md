@@ -16,8 +16,8 @@ API/browser calls, and a merged stats report.
 - **Node.js 18+** — the channel scripts use native `fetch`/`FormData`; `node --version` to check.
 - **A developer app per official channel you want** (LinkedIn, Meta for Facebook/Threads, X) — see
   [Setup](#setup). This is the biggest up-front cost; you only register the channels you'll use.
-- **Chrome or Chromium** — only for the browser channels (Brunch, Naver Blog). Installed on demand
-  via Playwright if absent.
+- **Chrome or Chromium** — needed for Brunch, Facebook view-count scraping, and initial/renewed
+  session capture for browserless cookie transports. Installed on demand via Playwright if absent.
 - **macOS or Linux.** Image conversion for X (webp/heic → png) shells out to macOS `sips`; on Linux,
   pass already-PNG/JPEG images.
 
@@ -40,7 +40,7 @@ choose. The rest of this README is the reference behind that guided flow.
 - **Rich-source angles.** For a video or repo it first offers a few candidate angles as a table and
   lets you pick, instead of guessing one.
 - **Auto-detected channels.** A channel runs only when its credentials are set. Unconfigured
-  channels are skipped silently — you don't need all seven.
+  channels are skipped silently — you don't need all eight.
 - **Per-channel variants.** Optional `<slug>.x.txt` / `<slug>.threads.txt` sibling files override
   the body for those channels; everything else uses the canonical file.
 - **Unified stats.** `/publish --stat` reads every channel's ledger and renders one merged table,
@@ -57,10 +57,12 @@ choose. The rest of this README is the reference behind that guided flow.
 | X (Twitter) | Official API v2 | Official | OAuth 1.0a; watch 429/402 |
 | Remember | Private API | **Unofficial / experimental** | May break without notice |
 | Brunch | Browser session (CDP) | No official API | Korean platform; one-time Kakao login |
-| Naver Blog | Browser session (CDP) | No official API | Korean platform; one-time Naver login |
+| Naver Blog | Session-cookie HTTP | No official API | Browserless after one-time Naver login |
+| Instagram | Official Graph API | Official | Publicly hosted image/video required |
 
-The four official-API channels and Remember need **no browser**. Brunch and Naver Blog drive a
-shared local Chromium via CDP and need a one-time manual login that persists in a local profile.
+The five official-API channels and Remember need **no browser for publishing**. Naver publishing
+is also browserless after its session cookie is captured. Brunch drives a shared local Chromium
+via CDP; Facebook view-count scraping and expired session-cookie recapture also use it.
 
 ## Setup
 
@@ -133,8 +135,8 @@ node post-api.mjs --edit <id> <file>     # LinkedIn, Facebook, Remember, Brunch,
                                          # (Threads and X: delete, then re-publish)
 ```
 
-**Browser channels** — Brunch and Naver need a live login the first time and whenever the session
-expires:
+**Browser-backed tasks** — Brunch publishing, Facebook view-count scraping, and initial or renewed
+Naver session capture need a live browser:
 
 ```
 cd <plugin root> && npm run browser      # log into Kakao (Brunch) / Naver in the window
@@ -151,7 +153,7 @@ update). Everything is under `$CROSSPOST_HOME` (default `~/.crosspost`):
 ├── voice.md                  # your brand voice guide
 ├── posts/                    # canonical post files + per-channel variants
 ├── ledgers/                  # published-<channel>.json (what was posted where)
-└── browser-profile/          # persistent Chromium profile for Brunch / Naver
+└── browser-profile/          # persistent Chromium profile for Brunch and session capture
 ```
 
 Set `CROSSPOST_HOME` to relocate it. Optional common vars: `CROSSPOST_CDP_PORT` (default 9224) and
@@ -207,9 +209,9 @@ the content table is unavailable, set this to the id that prefixes your ledger's
 generator). LinkedIn tokens expire too (re-auth in the LinkedIn developer portal). X returns 429
 on rate limits and 402 when credits are exhausted — back off and retry later, don't hammer.
 
-**Brunch/Naver ask me to log in.** Their sessions expire occasionally and cannot be re-logged in
+**Brunch/Naver ask me to log in.** Their sessions expire occasionally and cannot be renewed
 automatically. Run `npm run browser` at the plugin root and log in by hand in the window; the
-session persists in `browser-profile/`.
+session persists in `browser-profile/`. Naver returns to browserless publishing after recapture.
 
 **Do I need the Korean channels?** No. Remember, Brunch, and Naver Blog are Korea-oriented and
 fully optional. Configure only the channels you use — the rest are skipped.
@@ -221,8 +223,9 @@ never inside the plugin directory.
 
 - **Remember** uses an **unofficial, undocumented API**. It is experimental and may break at any
   time without notice.
-- **Brunch and Naver Blog** are automated through a browser because they have no official write
-  API. They depend on those sites' UI staying stable and can break when the sites change.
+- **Brunch** is automated through a browser because it has no official write API. **Naver Blog**
+  uses undocumented session-cookie HTTP endpoints after a manual login. Both can break when those
+  sites change.
 - **You are responsible for your own accounts** and for complying with each platform's Terms of
   Service and rate limits. Automated posting and scraping may be restricted on some platforms;
   use this tool accordingly and at your own risk.
@@ -230,6 +233,11 @@ never inside the plugin directory.
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+## Development checks
+
+Run `npm test` for the regression suite or `npm run check` for tests plus JavaScript and shell
+syntax validation.
 
 ---
 
@@ -240,8 +248,8 @@ MIT — see [LICENSE](./LICENSE).
 [English](#crosspost) · **한국어**
 
 **한 번 쓰고, 모든 채널에 발행.** 정본 포스트 하나를 본인 브랜드 보이스로 작성하면 설정해 둔 모든
-채널 — LinkedIn·Facebook·Threads·X·리멤버·브런치·네이버 블로그 — 로 교차발행한다. 채널별 본문 변형,
-통합 통계, 수정/삭제 지원.
+채널 — LinkedIn·Facebook·Threads·X·리멤버·브런치·네이버 블로그·Instagram — 로 교차발행한다.
+채널별 본문 변형, 통합 통계, 수정/삭제 지원.
 
 [Claude Code](https://claude.com/claude-code) 플러그인. **`/crosspost:publish`**(이름이 겹치지 않으면
 `/publish`)로 구동하며, Claude가 작성·채널별 API/브라우저 호출·통합 통계 보고를 처리한다.
@@ -252,8 +260,8 @@ MIT — see [LICENSE](./LICENSE).
 - **Node.js 18+** — 채널 스크립트가 네이티브 `fetch`/`FormData`를 쓴다. `node --version`으로 확인.
 - **쓰려는 공식 채널마다 개발자 앱** (LinkedIn, Facebook/Threads용 Meta, X) — [설정](#설정) 참고.
   초기 진입 비용이 가장 큰 부분이며, 실제 쓸 채널만 등록하면 된다.
-- **Chrome 또는 Chromium** — 브라우저 채널(브런치·네이버 블로그)에만 필요. 없으면 Playwright가
-  자동 설치.
+- **Chrome 또는 Chromium** — 브런치, Facebook 조회수 수집, 브라우저리스 쿠키 전송의 최초·갱신
+  세션 캡처에 필요. 없으면 Playwright가 자동 설치.
 - **macOS 또는 Linux.** X의 이미지 변환(webp/heic → png)은 macOS `sips`를 호출한다. Linux에서는
   PNG/JPEG 이미지를 바로 넘겨라.
 
@@ -274,7 +282,7 @@ MIT — see [LICENSE](./LICENSE).
 - **본인 보이스.** `voice.md`를 읽고 그 보이스로 작성한다 — 톤·길이·규칙은 사용자 소유.
 - **소스 앵글 제안.** 영상이나 레포는 하나를 임의로 고르지 않고 후보 앵글 몇 개를 표로 먼저 제시해
   사용자가 고르게 한다.
-- **채널 자동감지.** 자격증명이 설정된 채널만 실행. 미설정 채널은 조용히 건너뛴다 — 7개 다 필요 없다.
+- **채널 자동감지.** 자격증명이 설정된 채널만 실행. 미설정 채널은 조용히 건너뛴다 — 8개 다 필요 없다.
 - **채널별 변형.** 선택적 `<slug>.x.txt`·`<slug>.threads.txt` 형제 파일로 그 채널 본문만 교체.
   나머지는 정본 파일 사용.
 - **통합 통계.** `/publish --stat`이 전 채널 장부를 읽어 최신순 통합 표 하나로 렌더.
@@ -290,10 +298,12 @@ MIT — see [LICENSE](./LICENSE).
 | X (트위터) | 공식 API v2 | 공식 | OAuth 1.0a; 429/402 주의 |
 | 리멤버 | 사설 API | **비공식 / 실험적** | 예고 없이 깨질 수 있음 |
 | 브런치 | 브라우저 세션 (CDP) | 공식 API 없음 | 한국 플랫폼; 카카오 1회 로그인 |
-| 네이버 블로그 | 브라우저 세션 (CDP) | 공식 API 없음 | 한국 플랫폼; 네이버 1회 로그인 |
+| 네이버 블로그 | 세션 쿠키 HTTP | 공식 API 없음 | 네이버 1회 로그인 후 브라우저리스 |
+| Instagram | 공식 Graph API | 공식 | 공개 호스팅 이미지/영상 필수 |
 
-공식 API 채널 4개와 리멤버는 **브라우저 불필요**. 브런치·네이버 블로그는 공유 로컬 Chromium을 CDP로
-구동하며, 로컬 프로필에 유지되는 수동 1회 로그인이 필요하다.
+공식 API 채널 5개와 리멤버는 **발행 시 브라우저 불필요**. 네이버 발행도 세션 쿠키 캡처 후에는
+브라우저리스다. 브런치는 공유 로컬 Chromium을 CDP로 구동하고, Facebook 조회수 수집과 만료된
+세션 쿠키 재캡처에도 브라우저를 쓴다.
 
 ## 설정
 
@@ -359,7 +369,8 @@ node post-api.mjs --edit <id> <file>     # LinkedIn, Facebook, 리멤버, 브런
                                          # (Threads·X는 삭제 후 재발행)
 ```
 
-**브라우저 채널** — 브런치·네이버는 첫 실행 시, 그리고 세션 만료 때마다 실 로그인이 필요하다:
+**브라우저 기반 작업** — 브런치 발행, Facebook 조회수 수집, 네이버 세션 최초·갱신 캡처에는
+실 브라우저가 필요하다:
 
 ```
 cd <플러그인 루트> && npm run browser     # 창에서 카카오(브런치)/네이버 로그인
@@ -376,7 +387,7 @@ cd <플러그인 루트> && npm run browser     # 창에서 카카오(브런치)
 ├── voice.md                  # 본인 브랜드 보이스 가이드
 ├── posts/                    # 정본 포스트 파일 + 채널별 변형
 ├── ledgers/                  # published-<channel>.json (무엇을 어디에 발행했는지)
-└── browser-profile/          # 브런치 / 네이버용 유지 Chromium 프로필
+└── browser-profile/          # 브런치 및 세션 캡처용 유지 Chromium 프로필
 ```
 
 `CROSSPOST_HOME`으로 위치를 옮길 수 있다. 선택적 공통 변수: `CROSSPOST_CDP_PORT`(기본 9224),
@@ -388,8 +399,9 @@ cd <플러그인 루트> && npm run browser     # 창에서 카카오(브런치)
 토큰도 만료(LinkedIn 개발자 포털에서 재인증). X는 rate limit에 429, 크레딧 소진에 402를 반환한다 —
 연속 재시도 말고 물러났다 나중에.
 
-**브런치/네이버가 로그인을 요구해요.** 세션이 간헐적으로 만료되며 자동 재로그인이 불가하다. 플러그인
-루트에서 `npm run browser`를 실행해 창에서 직접 로그인하라. 세션은 `browser-profile/`에 유지된다.
+**브런치/네이버가 로그인을 요구해요.** 세션이 간헐적으로 만료되며 자동 갱신이 불가하다. 플러그인
+루트에서 `npm run browser`를 실행해 창에서 직접 로그인하라. 세션은 `browser-profile/`에 유지되고,
+네이버는 재캡처 후 다시 브라우저 없이 발행한다.
 
 **한국 채널이 꼭 필요한가요?** 아니오. 리멤버·브런치·네이버 블로그는 한국 지향이며 전적으로 선택.
 쓰는 채널만 설정하고 나머지는 건너뛴다.
@@ -400,11 +412,15 @@ cd <플러그인 루트> && npm run browser     # 창에서 카카오(브런치)
 ## 고지
 
 - **리멤버**는 **비공식·비문서 API**를 사용한다. 실험적이며 예고 없이 언제든 깨질 수 있다.
-- **브런치·네이버 블로그**는 공식 쓰기 API가 없어 브라우저로 자동화한다. 해당 사이트 UI 안정성에
-  의존하며 사이트 변경 시 깨질 수 있다.
+- **브런치**는 공식 쓰기 API가 없어 브라우저로 자동화한다. **네이버 블로그**는 수동 로그인 뒤
+  비공개 세션 쿠키 HTTP 엔드포인트를 쓴다. 둘 다 사이트 변경 시 깨질 수 있다.
 - **본인 계정에 대한 책임은 본인에게 있다.** 각 플랫폼의 이용약관과 rate limit을 준수하라. 자동 발행·
   스크레이핑이 일부 플랫폼에서 제한될 수 있으니 그에 맞게 본인 책임하에 사용하라.
 
 ## 라이선스
 
 MIT — [LICENSE](./LICENSE) 참고.
+
+## 개발 검증
+
+회귀 테스트는 `npm test`, 테스트와 JavaScript·셸 구문 검증 전체는 `npm run check`로 실행한다.

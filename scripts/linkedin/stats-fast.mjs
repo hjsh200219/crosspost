@@ -280,7 +280,11 @@ if (allMode && !VANITY) {
   process.exit(1);
 }
 const argUrns = allMode ? [] : ARGV;
-const ledger = JSON.parse(readFileSync(LEDGER, 'utf8'));
+const ledger = existsSync(LEDGER) ? JSON.parse(readFileSync(LEDGER, 'utf8')) : [];
+if (!allMode && !argUrns.length && !ledger.length) {
+  console.log('No LinkedIn posts yet (published-linkedin.json is empty)');
+  process.exit(0);
+}
 
 // Ledger-only targets need no browser at all — only --all does (infinite-scroll discovery).
 function ledgerTargets() {

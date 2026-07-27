@@ -8,7 +8,7 @@
     {
       "name": "crosspost",
       "source": "./",
-      "description": "Write once, publish everywhere: cross-post a single canonical post to LinkedIn, Facebook, Threads, X, Remember, Brunch, and Naver Blog — with per-channel body variants, unified stats, and edit/delete support."
+      "description": "Write once, publish everywhere: cross-post a single canonical post to LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog, and Instagram — with per-channel body variants, unified stats, and edit/delete support."
     }
   ]
 }

@@ -5,7 +5,9 @@
   "description": "Claude Code plugin: cross-post one canonical post to 8 channels (LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog, Instagram)",
   "license": "MIT",
   "scripts": {
-    "browser": "bash scripts/lib/launch-browser.sh"
+    "browser": "bash scripts/lib/launch-browser.sh",
+    "test": "node --test",
+    "check": "npm test && for f in $(find scripts -name '*.mjs' -type f); do node --check \"$f\" || exit 1; done && for f in $(find scripts skills -name '*.sh' -type f); do bash -n \"$f\" || exit 1; done"
   },
   "dependencies": {
     "playwright": "^1.60.0"

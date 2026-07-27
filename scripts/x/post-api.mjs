@@ -295,7 +295,11 @@ if (args[0] === '--preview') { // check the teaser without publishing: node post
       } catch (e) {
         console.error(`${base}: ${e.message}`);
         // Credits depleted / rate limited / auth failed will keep blocking every subsequent post — stop the batch.
-        if (/credits depleted|rate limited|auth failed/i.test(e.message)) { console.error(`↳ Publish limit hit — stopping batch (${posted} posted). Resume with --skip-done.`); break; }
+        if (/credits depleted|rate limited|auth failed/i.test(e.message)) {
+          console.error(`↳ Publish limit hit — stopping batch (${posted} posted). Resume with --skip-done.`);
+          process.exitCode = 1;
+          break;
+        }
         // Duplicate content means it's already on X → mark it done in the ledger so --skip-done skips it next run.
         if (/duplicate content/i.test(e.message)) {
           const l = loadLedger();

@@ -3,7 +3,7 @@ name: publish
 description: >-
   Turn one source (a YouTube URL, a GitHub repo, or a topic/draft) into a single
   canonical post in your own brand voice and cross-post it to every configured
-  channel — LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog. Skips
+  channel — LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog, Instagram. Skips
   channels you have not set up. With no arguments (or --stat) it reports engagement
   stats across channels instead. Triggers — "publish", "cross-post", "post this
   everywhere", "post to LinkedIn/Threads/X", a YouTube or GitHub URL with "post

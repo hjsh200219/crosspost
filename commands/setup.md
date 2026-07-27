@@ -40,6 +40,7 @@ Read `$CROSSPOST_HOME/.env` and note which channel variables already have values
 | Remember | `REMEMBER_TOKEN` |
 | Brunch | `BRUNCH_COOKIE` |
 | Naver Blog | `NAVER_BLOG_ID` |
+| Instagram | `IG_USER_ID` + `IG_ACCESS_TOKEN` |
 
 **Only walk the user through the channels that are still empty.** You do not need every channel —
 crosspost publishes to whichever are configured and silently skips the rest. Ask the user which
@@ -97,6 +98,13 @@ of the missing channels they want to add now, and guide only those.
 1. In the same shared browser (`npm run browser`), log into Naver once.
 2. Set `NAVER_BLOG_ID` to your blog id (the part after `blog.naver.com/`).
    Naver blocks automated login by policy — re-login manually when the session expires.
+
+### Instagram (official Graph API, media required)
+1. In your Meta app, add the **Instagram** use case and connect a Business or Creator account.
+2. Set `IG_USER_ID` and a long-lived `IG_ACCESS_TOKEN`.
+3. Publish generated cards or reels at a publicly reachable HTTPS location and set
+   `CROSSPOST_MEDIA_BASE_URL` to that base URL. Meta fetches media from this URL; local files
+   cannot be uploaded directly through the publishing API.
 
 ---
 

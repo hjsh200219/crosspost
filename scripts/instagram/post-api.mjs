@@ -65,8 +65,9 @@ const captionFor = (slug) => {
     const p = join(POSTS, name);
     if (existsSync(p)) {
       const raw = readFileSync(p, 'utf8').trim();
-      // the canonical file's first line is its title; the Instagram variant is caption-only
-      return name.endsWith('.insta.txt') ? raw : raw.split('\n').slice(1).join('\n').trim();
+      // Canonical files are publishable bodies, not metadata documents. Their first line is
+      // the cross-channel opening hook and must remain in the Instagram fallback caption.
+      return raw;
     }
   }
   return null;
@@ -98,7 +99,19 @@ if (editIdx !== -1) {
 const delId = flag('--delete');
 if (delId) {
   const r = await fetch(`${GRAPH}/${delId}?access_token=${encodeURIComponent(TOKEN)}`, { method: 'DELETE' });
-  console.log(JSON.stringify(await r.json()));
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = null; }
+  const confirmed = data === true || data?.success === true;
+  if (!r.ok || data?.error || !confirmed) {
+    console.error(`delete ${r.status}: ${data?.error ? JSON.stringify(data.error) : text.slice(0, 300)}`);
+    process.exit(1);
+  }
+  if (existsSync(LEDGER)) {
+    const ledger = JSON.parse(readFileSync(LEDGER, 'utf8')).filter((entry) => entry.id !== delId);
+    writeFileSync(LEDGER, JSON.stringify(ledger, null, 2) + '\n');
+  }
+  console.log(`deleted: ${delId}`);
   process.exit(0);
 }
 

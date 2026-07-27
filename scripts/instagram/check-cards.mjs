@@ -77,7 +77,7 @@ function checkSlug(slug, reels) {
   } else {
     const usingFallback = !existsSync(capPath);
     const raw = readFileSync(usingFallback ? fallback : capPath, 'utf8').trim();
-    const caption = usingFallback ? raw.split('\n').slice(1).join('\n').trim() : raw;
+    const caption = raw;
     if (usingFallback) warnings.push('no .insta.txt — falling back to the canonical body, which is usually too long for a caption');
     const r = validateCaption(caption, { canonicalUrl: canonicalLink(fallback) });
     errors.push(...r.errors);

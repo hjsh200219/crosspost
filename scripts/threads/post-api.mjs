@@ -6,6 +6,7 @@
 //
 //   node post-api.mjs ../linkedin/posts/2026-06-30_x.txt   # publish one file as a chain
 //   node post-api.mjs --image-url <https-url> file.txt      # attach an image to the root post (Threads needs a public URL)
+//   node post-api.mjs --skip-done file.txt                  # skip files already recorded in the ledger
 //   node post-api.mjs a.txt b.txt                          # several (sequential, isolated)
 //   node post-api.mjs --delete <thread-id>                 # delete a single post
 //   node post-api.mjs --backfill-links                     # retro-attach link trailer to entries posted before their canonical article existed
@@ -217,6 +218,8 @@ async function publishFile(file, ids, imageUrl) {
 
 // --- run ---
 let argv = process.argv.slice(2);
+const skipDone = argv.includes('--skip-done');
+if (skipDone) argv = argv.filter((arg) => arg !== '--skip-done');
 // --image-url <public https url> : 루트 포스트에 붙일 이미지 (Threads는 공개 URL만 허용, 바이너리 업로드 불가)
 let IMAGE_URL = null;
 {
@@ -243,8 +246,20 @@ if (argv[0] === '--delete') {
 } else if (argv[0] === '--backfill-links') {
   await backfillLinks();
 } else if (argv.length) {
+  const done = skipDone
+    ? new Set((existsSync(LEDGER) ? JSON.parse(readFileSync(LEDGER, 'utf8')) : [])
+      .map((entry) => path.basename(entry.file || '')))
+    : new Set();
   for (const f of argv) {
-    if (!existsSync(f)) { console.error(`${f}: not found`); continue; }
+    if (!existsSync(f)) {
+      console.error(`${f}: not found`);
+      process.exitCode = 1;
+      continue;
+    }
+    if (skipDone && done.has(path.basename(f))) {
+      console.log(`${f}: skip (already published)`);
+      continue;
+    }
     // 이미지: 명시 --image-url(실패 시 큰 소리) 또는 자동해석(best-effort).
     // Threads는 공개 URL을 서버가 페치·트랜스코드하므로 정본 배포(발행 순서 2단계) 뒤에 라이브다.
     const auto = IMAGE_URL ? null : resolveImage(f);
@@ -261,15 +276,17 @@ if (argv[0] === '--delete') {
         catch (e2) {
           console.error(`${f}: FAILED ${e2.message}`);
           if (ids.length) console.error(`  already-published chunks (manual --delete needed): ${ids.join(', ')}`);
+          process.exitCode = 1;
         }
       } else {
         console.error(`${f}: FAILED ${e.message}`);
         if (ids.length) console.error(`  already-published chunks (manual --delete needed): ${ids.join(', ')}`);
+        process.exitCode = 1;
       }
     }
     await sleep(1500);
   }
 } else {
-  console.error('usage: post-api.mjs <file...> | --delete <thread-id> | --backfill-links');
+  console.error('usage: post-api.mjs [--skip-done] <file...> | --delete <thread-id> | --backfill-links');
   process.exit(1);
 }

@@ -36,7 +36,19 @@ const flagVal = (name) => { const i = args.indexOf(name); return i !== -1 ? args
 const delId = flagVal('--delete');
 if (delId) {
   const r = await fetch(`${GRAPH}/${delId}?access_token=${encodeURIComponent(TOKEN)}`, { method: 'DELETE' });
-  console.log(JSON.stringify(await r.json()));
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = null; }
+  const confirmed = data === true || data?.success === true;
+  if (!r.ok || data?.error || !confirmed) {
+    console.error(`delete ${r.status}: ${data?.error ? JSON.stringify(data.error) : text.slice(0, 300)}`);
+    process.exit(1);
+  }
+  if (existsSync(LEDGER)) {
+    const ledger = JSON.parse(readFileSync(LEDGER, 'utf8')).filter((entry) => entry.id !== delId);
+    writeFileSync(LEDGER, JSON.stringify(ledger, null, 2) + '\n');
+  }
+  console.log(`deleted: ${delId}`);
   process.exit(0);
 }
 
@@ -154,7 +166,13 @@ for (const f of files) {
     ({ res, dated } = await publishTextWithBackdateFallback(message, link, backdateIso, base));
     console.log(`${base}: published id=${res.id}${link ? ' +link' : ''}${dated ? ' @' + backdate : ''}`);
   }
-  ledger.push({ file: base, id: res.id, link: link || null, date: backdate || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()) });
+  ledger.push({
+    file: base,
+    id: res.id,
+    link: link || null,
+    date: backdate || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()),
+    publishedAt: backdateIso ? new Date(backdateIso).toISOString() : new Date().toISOString(),
+  });
   done.add(base);
   writeFileSync(LEDGER, JSON.stringify(ledger, null, 2) + '\n');
 }

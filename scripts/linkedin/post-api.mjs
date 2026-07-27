@@ -237,7 +237,10 @@ if (argv[0] === '--at') {
         catch (e) { console.error(`  ↳ first comment FAILED: ${e.message}`); }
       }
     }
-    catch (e) { console.error(`${f}: FAILED`, e.message); }
+    catch (e) {
+      console.error(`${f}: FAILED`, e.message);
+      process.exitCode = 1;
+    }
     await new Promise((r) => setTimeout(r, 1500));
   }
 } else {

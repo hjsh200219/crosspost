@@ -167,6 +167,25 @@ export function buildDocumentModel({ title, body, cover, trailer }) {
   };
 }
 
+// Stable, transport-independent representation used for publish read-back verification.
+// SE-ONE regenerates opaque ids, so compare component type + visible text + image path only.
+export function documentSignature(components) {
+  const textValues = (value, out = []) => {
+    if (Array.isArray(value)) {
+      for (const item of value) textValues(item, out);
+    } else if (value && typeof value === 'object') {
+      if (value['@ctype'] === 'textNode' && typeof value.value === 'string') out.push(value.value);
+      else for (const nested of Object.values(value)) textValues(nested, out);
+    }
+    return out;
+  };
+  return (components || []).map((component) => ({
+    type: component['@ctype'] || null,
+    text: textValues(component),
+    ...(component['@ctype'] === 'image' ? { path: component.path || component.src || null } : {}),
+  }));
+}
+
 // openType 2 = public, 0 = private (used by the verification path).
 export async function publishDocument({ cookie, blogId, documentModel, categoryNo, tags = [], openType = 2 }) {
   const populationParams = {

@@ -28,7 +28,7 @@ import { readPostBody } from '../lib/post-body.mjs';
 import { canonicalLink, slugFromFile, linkText } from '../lib/canonical-link.mjs';
 import { resolveImage } from '../lib/post-image.mjs';
 import { resolveCookie } from '../lib/site-cookie.mjs';
-import { seToken, categoryMap, uploadImage, buildDocumentModel, publishDocument, readDocument } from './http-publish.mjs';
+import { seToken, categoryMap, uploadImage, buildDocumentModel, documentSignature, publishDocument, readDocument } from './http-publish.mjs';
 
 loadEnv();
 
@@ -39,10 +39,15 @@ const DEFAULT_CATEGORY = '게시판';
 
 const argv = process.argv.slice(2);
 const DRY = argv.includes('--dry');
+const SKIP_DONE = argv.includes('--skip-done');
 const flag = (n) => { const i = argv.indexOf(n); return i !== -1 ? argv[i + 1] : null; };
 
 // ---------- ledger ----------
 const readLedger = () => (existsSync(LEDGER) ? JSON.parse(readFileSync(LEDGER, 'utf8')) : []);
+const alreadyPublished = (file) => {
+  const slug = slugFromFile(file) || file;
+  return readLedger().some((entry) => entry.slug === slug || entry.file === file);
+};
 function recordLedger(rec) {
   const l = readLedger();
   const i = l.findIndex((e) => e.logNo === rec.logNo || e.slug === rec.slug);
@@ -84,19 +89,6 @@ async function insertImage(absPath) {
     return true;
   } catch (e) { console.error('  image insert failed:', e.message.slice(0, 50)); return false; }
 }
-async function linkCurrentLine(url) {
-  await page.keyboard.press('Home');
-  await page.keyboard.down('Shift'); await page.keyboard.press('End'); await page.keyboard.up('Shift');
-  await page.waitForTimeout(200);
-  await frame.locator('button[data-name="text-link"]').first().click();
-  await page.waitForTimeout(600);
-  const input = frame.locator('.se-link-input, .se-popup input[type="text"]').first();
-  await input.fill(url).catch(async () => { await page.keyboard.type(url, { delay: 5 }); });
-  await page.waitForTimeout(300);
-  await page.keyboard.press('Enter').catch(() => {});
-  await frame.locator('.se-link-apply-button, button:has-text("확인")').first().click({ timeout: 1500 }).catch(() => {});
-  await page.waitForTimeout(400);
-}
 async function renderBody(body, imageAbs, canonicalUrl) {
   // cover image
   if (imageAbs && existsSync(imageAbs)) { await insertImage(imageAbs); await enter(); }
@@ -109,11 +101,11 @@ async function renderBody(body, imageAbs, canonicalUrl) {
     }
     for (const line of para.split('\n')) { await type(line); await enter(); }
   }
-  // hyperlinked canonical trailer
+  // Canonical trailer is plain text in both transports. The UI's link toolbar accepted the
+  // action but published documents contained no link node, so attempting it only created drift.
   if (canonicalUrl) {
     await divider();
     await type(`${linkText()}: ${canonicalUrl}`);
-    await linkCurrentLine(canonicalUrl);
     await page.waitForTimeout(400);
   }
 }
@@ -248,19 +240,31 @@ async function doPublishHttp(file, categoryOverride, imageOverride, tagsOverride
   const logNo = await publishDocument({ cookie, blogId: BLOG_ID, documentModel, categoryNo, tags, openType });
 
   // verify by reading the document back — `isSuccess` alone is not proof it rendered
+  const expected = documentSignature(documentModel.document.components);
   const live = await readDocument(cookie, BLOG_ID, logNo);
-  const want = documentModel.document.components.length;
-  if (!live || live.length !== want) {
-    throw new Error(`publish verification failed (logNo ${logNo}): ${live ? live.length : 'null'} components, expected ${want}`);
+  const actual = documentSignature(live);
+  if (!live || JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `publish verification failed (logNo ${logNo}): ` +
+      `expected ${JSON.stringify(expected).slice(0, 500)}, got ${live ? JSON.stringify(actual).slice(0, 500) : 'null'}`,
+    );
   }
 
   const url = `https://blog.naver.com/${BLOG_ID}/${logNo}`;
   // A private publish is a verification run — never touch the ledger, or it overwrites the
   // real post's logNo for this slug and every later stats/edit call follows the ghost.
   if (openType === 2) {
-    recordLedger({ slug, logNo, url, category, title: post.title, date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()) });
+    recordLedger({
+      slug,
+      logNo,
+      url,
+      category,
+      title: post.title,
+      date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()),
+      publishedAt: new Date().toISOString(),
+    });
   }
-  console.log(`PUBLISHED → ${url}  (${want} components · ${tags.length} tags · cookie: ${src}${openType === 0 ? ' · private' : ''})`);
+  console.log(`PUBLISHED → ${url}  (${expected.length} components · ${tags.length} tags · cookie: ${src}${openType === 0 ? ' · private' : ''})`);
   return logNo;
 }
 
@@ -290,8 +294,21 @@ async function doPublish(file, categoryOverride, imageOverride, tagsOverride) {
     await frame.locator('button[class*="confirm_btn__"]').first().click();
     await page.waitForTimeout(6000);
     const logNo = logNoFromUrl(page.url());
-    if (logNo) { const url = `https://blog.naver.com/${BLOG_ID}/${logNo}`; recordLedger({ slug, logNo, url, category, title: post.title, date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()) }); console.log(`PUBLISHED → ${url}`); }
-    else console.log('published? url=', page.url());
+    if (logNo) {
+      const url = `https://blog.naver.com/${BLOG_ID}/${logNo}`;
+      recordLedger({
+        slug,
+        logNo,
+        url,
+        category,
+        title: post.title,
+        date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()),
+        publishedAt: new Date().toISOString(),
+      });
+      console.log(`PUBLISHED → ${url}`);
+    } else {
+      throw new Error(`publish verification failed: no logNo in final URL ${page.url()}`);
+    }
   });
 }
 
@@ -389,8 +406,10 @@ if (editIdx !== -1) {
   await doDelete(delId);
 } else {
   const file = argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && excludesValueOf.includes(argv[i - 1])))[0];
-  if (!file) { console.error('usage: post-api.mjs <file> [--category "..."] [--image <path>] [--tags "a,b,c"] [--ui] [--private] [--dry]'); process.exit(1); }
-  if (argv.includes('--ui') || DRY) {
+  if (!file) { console.error('usage: post-api.mjs <file> [--skip-done] [--category "..."] [--image <path>] [--tags "a,b,c"] [--ui] [--private] [--dry]'); process.exit(1); }
+  if (SKIP_DONE && alreadyPublished(file)) {
+    console.log(`${file}: skip (already published)`);
+  } else if (argv.includes('--ui') || DRY) {
     // --dry fills the editor and screenshots it, so it only means anything on the UI path
     await doPublish(file, flag('--category'), flag('--image'), flag('--tags'));
   } else {

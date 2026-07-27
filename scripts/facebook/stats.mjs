@@ -24,8 +24,8 @@ const led = existsSync(LEDGER) ? JSON.parse(readFileSync(LEDGER, 'utf8')) : [];
 const ledArr = Array.isArray(led) ? led : Object.values(led);
 const dateKey = (f) => (String(f || '').match(/(\d{4}-\d{2}-\d{2})/) || [, ''])[1];
 const dateById = new Map(ledArr.map((e) => [e.id, dateKey(e.file) || e.date]).filter(([id]) => id));
-// Sort key (date+time): borrow the LinkedIn ledger's publish ms by file/slug, fall back to date.
-const msById = new Map(ledArr.map((e) => [e.id, publishMs({ file: e.file, date: dateKey(e.file) || e.date })]).filter(([id]) => id));
+// Sort by this channel's own publish timestamp; legacy rows fall back to their date.
+const msById = new Map(ledArr.map((e) => [e.id, publishMs({ publishedAt: e.publishedAt, date: dateKey(e.file) || e.date })]).filter(([id]) => id));
 // explicit positional ids (exclude the --limit value); else ledger ids, date desc, sliced to limit
 const limValIdx = limIdx >= 0 ? limIdx + 1 : -1;
 const explicit = args.filter((a, i) => !a.startsWith('--') && i !== limValIdx);
