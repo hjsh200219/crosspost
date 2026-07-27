@@ -1,54 +1,59 @@
 ---
-created: 2026-07-27T12:10:00+09:00
+created: 2026-07-27T22:48:58+09:00
 project: crosspost
-summary: 브라우저 의존을 3경로에서 걷어내고(LinkedIn·네이버 통계, 네이버 발행) Instagram을 8번째 채널로 신설. v0.2.0 → v0.4.0.
+summary: 8채널 발행 계약을 보강하고 회귀 테스트 22개로 잠근 뒤 main에 푸시했다.
 ---
 
 ## Session Digest
 
-원본 repo(shconsulting)에서 통계·발행의 브라우저 의존을 걷어낸 작업을 이 플러그인에 이식하고, 이어서 Instagram 채널을 새로 만들었다. 이식분은 원본에서 실계정으로 검증된 것이고, IG 카드 생성기는 브랜드 결합 때문에 **그대로 옮기지 않고 범용판으로 다시 썼다**.
+코드 리뷰에서 확인한 발행·삭제·통계 계약 문제를 모두 수정했다. 핵심은 `--skip-done`의 조기 종료,
+API 실패 전파, 채널별 장부 독립성, Naver 되읽기 검증이며, `npm run check`로 테스트와 구문 검사를
+한 번에 실행할 수 있게 했다.
 
 ## Progress
 
-**완료**
-- `scripts/lib/site-cookie.mjs` 신설 — env 우선 + CDP 재캡처·`$CROSSPOST_HOME/.env` 영속
-- **LinkedIn 통계 browserless** — 분석 페이지가 SSR, `li_at` 쿠키만. `--all`만 CDP 유지
-- **네이버 통계 browserless** — cv/like는 서버 직접 호출, 댓글만 `m.blog` 문서에서
-- **네이버 발행 browserless** (`http-publish.mjs` 신설) — 엔드포인트 4개, `--ui` 폴백 유지. `--edit`/`--delete`는 아직 UI
-- **네이버 `--delete` 수정** — 공유 브라우저에서 confirm 경쟁으로 실제 삭제가 안 되면서 성공을 보고하던 것
-- **fb-reach 전면 재작성** — Business Suite 콘텐츠 표(classic asset id), FB/IG 행 배지 필터, 그리드 자체 스크롤. `FACEBOOK_PAGE_ASSET_ID` 신설
-- **Instagram 채널 신설(8번째)** — `post-api`·`stats`·`gen-cards`·`gen-reel`·`check-cards`·`card-rules`
-- 문서 갱신(README EN/KO·SKILL.md·CLAUDE.md), plugin.json **0.4.0**
-
-**검증한 것 / 안 한 것**
-- IG 렌더러 체인은 임시 `CROSSPOST_HOME`에서 **실제 실행**: 카드 5장·릴스 프레임 3장(1080×1350 / 1080×1920), 오버플로 검출 exit 1, 게이트가 base URL 미설정·스테일 렌더 탐지, ffmpeg 13.7초 mp4
-- **발행·통계는 이 환경에서 미검증** — `~/.crosspost/.env`에 자격증명이 없다
-
-**커밋**: `0365ce0`(browserless 이식) · `5996d67`(Instagram 채널)
+- 완료: Remember 공통 `post-api.mjs`/`stats.mjs` 진입점 추가
+- 완료: Threads·Naver·Brunch `--skip-done`을 자격증명·쿠키·브라우저 접근 전에 처리
+- 완료: Brunch 장부가 손상되면 중복 발행 위험을 피하도록 fail-closed 처리
+- 완료: Facebook·Instagram 삭제 응답을 검증하고 성공 확인 후에만 장부에서 제거
+- 완료: LinkedIn·Threads·X 배치 실패를 비정상 종료 코드로 전파
+- 완료: fresh install의 LinkedIn 통계 빈 장부 처리
+- 완료: 발행 순서 계산의 LinkedIn 장부 결합 제거, Facebook·Naver에 `publishedAt` 기록
+- 완료: Naver HTTP 발행 되읽기를 component 구조·본문 signature로 비교
+- 완료: Instagram canonical caption 첫 줄 보존
+- 완료: README·setup·env·skill·marketplace를 8채널/Instagram/browserless Naver 기준으로 동기화
+- 완료: `package-lock.json`, `npm test`, `npm run check`, Node 회귀 테스트 추가
+- 검증: `npm run check` 통과(22/22), `git diff --check` 통과, `npm audit --omit=dev` 취약점 0건
+- 푸시: `de97022`, `2fdd3d2`가 `origin/main`에 반영됨
 
 ## Next Steps
 
-1. **자격증명 있는 환경에서 IG 실발행 1회** — `check-cards` → `post-api --dry-run`(컨테이너까지, Meta가 URL을 실제로 페치하는지 증명) → 실발행 → `stats.mjs`
-2. **네이버 HTTP 발행도 실환경 1회 확인** — 원본에서 UI판과 36/36 컴포넌트 대조까지 했지만 이 repo의 입력 모델은 평문 `.txt`라 문서 조립 경로가 다르다. `--private`로 내보고 대조 후 삭제 권장
-3. `--edit`/`--tags`를 HTTP로 옮길지 — `documentModel.documentId` + `populationMeta.logNo`로 될 가능성이 높다(미검증)
-4. 릴스 원고 길이 가이드가 아직 문서에만 있다 — `gen-reel`이 컷 상한 초과를 경고하지만 `check-cards`는 안 본다
+1. 자격증명 있는 fresh home에서 `npm ci && npm run check`를 다시 실행한다.
+2. Naver private publish → readback → delete 왕복으로 실제 응답의 `documentSignature`를 확인한다.
+3. Instagram `check-cards` → `post-api --dry-run` → 실제 publish → `stats.mjs`를 공개 미디어 URL로 검증한다.
+4. Facebook·Instagram 실제 삭제 성공 응답 뒤 장부 prune을 테스트 계정에서 한 번 확인한다.
 
 ## Blockers
 
-- **브런치는 서버측 전환 불가 확정** — [[brunch-server-side-impossible]]. 쿠키 4조합·`x-csrf-token` 동봉 전부 401
-- **IG는 공개 호스팅이 없으면 쓸 수 없다** — Meta가 URL에서 페치하므로 우회 불가. 이 전제를 README에 명시했다
+- 현재 환경에는 실서비스 자격증명이 없어 live publish/stats/delete 검증을 실행할 수 없다.
+- Instagram은 Meta가 가져갈 공개 이미지/영상 URL 없이는 실제 발행 검증이 불가능하다.
+- Brunch는 UI/CDP 자동화 의존이 남아 있다.
+- Naver는 비공개 세션 쿠키 HTTP 엔드포인트라 사이트 응답 구조 변경 위험이 있다.
 
 ## Watch Out
 
-- **LinkedIn은 `li_at` 하나만** 보낼 것 — 전체 쿠키는 400 + 빈 본문
-- **`—`(측정 실패)와 `0`(진짜 0)** 구분 유지 — 조회는 3회 재시도 후에만 null
-- **Business Suite 표는 FB·IG 행을 섞는다** — 캡션만 매칭하면 FB 행에 IG 숫자가 붙는다. `<img alt>` 배지 필터를 "단순화"하지 말 것
-- **공유 브라우저에서 native confirm은 먼저 잡는 쪽이 이긴다** — 페이지 안에서 무력화하고, 부수효과는 되읽어 확인한 뒤에만 장부 갱신
-- **IG는 발행 후 아무것도 못 고친다** — `check-cards`와 `--dry-run`이 실질적 게이트
-- **`node_modules`가 repo에 없다** — 로컬에서 스크립트를 돌리려면 `npm install` 필요(이번 검증은 설치본 캐시를 임시 심볼릭 링크해 돌리고 지웠다)
+- `--skip-done`은 credential, cookie, browser, API 접근보다 먼저 실행한다.
+- 손상된 장부를 빈 장부로 간주하지 않는다. 중복 발행 방지를 위해 fail-closed가 기본이다.
+- 다른 채널 장부에서 발행 시각을 빌리지 말고 각 장부에 `publishedAt`/`ts`를 기록한다.
+- Facebook·Instagram 삭제는 HTTP 상태와 응답의 성공 확인 값을 함께 검증한다.
+- Naver readback은 component 구조와 텍스트 signature를 함께 비교한다.
+- Instagram canonical caption의 첫 줄을 제거하지 않는다.
+- `console.log`는 CLI 사용자 출력이 많으므로 디버그 잔여물로 일괄 제거하지 않는다.
 
 ## Files Touched
 
-- 신규: `scripts/lib/site-cookie.mjs` · `scripts/naver-blog/http-publish.mjs` · `scripts/instagram/{post-api,stats,gen-cards,gen-reel,check-cards,card-rules}.mjs`
-- 수정: `scripts/linkedin/stats-fast.mjs` · `scripts/naver-blog/{stats,post-api}.mjs` · `scripts/facebook/fb-reach.mjs`
-- 문서: `README.md` · `skills/publish/SKILL.md` · `CLAUDE.md` · `.claude-plugin/plugin.json` · `package.json`
+- 공통/워크플로: `scripts/lib/publish-order.mjs`, `skills/publish/SKILL.md`
+- 채널: `scripts/{brunch,facebook,instagram,linkedin,naver-blog,remember,threads,x}/`
+- 테스트: `test/`, `test-support/`, `package.json`, `package-lock.json`
+- 문서/설정: `README.md`, `commands/setup.md`, `config/.env.example`, `CLAUDE.md`,
+  `.claude-plugin/marketplace.json`

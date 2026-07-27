@@ -38,5 +38,7 @@
 
 - `.claude-plugin/plugin.json`의 `version`을 반드시 bump할 것. bump 없이는 `plugin update`가 no-op이다
 - 캐시 갱신이 안 먹으면 uninstall + reinstall
+- 로컬 검증 기본값은 `npm run check`다. `node --test`, `scripts/**/*.mjs` 문법 검사,
+  `skills/**/*.sh` 문법 검사를 묶는다
 - **syntax check와 grep만으로 검증했다고 하지 말 것.** 실제 설치한 fresh-home에서 한 번 돌려봐야 한다
 - 개인 경로·계정 ID(`edb_development`, `inter349` 등)가 섞이지 않았는지 확인
