@@ -177,12 +177,59 @@ env vars present in `$CROSSPOST_HOME/.env`:
 | Remember | `REMEMBER_TOKEN` | unofficial API (experimental) — no browser |
 | Brunch | `BRUNCH_COOKIE` | browser session (CDP) |
 | Naver Blog | `NAVER_BLOG_ID` | session cookie — no browser (`--ui` falls back to the editor) |
+| Instagram | `IG_USER_ID` + `IG_ACCESS_TOKEN` (+ `CROSSPOST_MEDIA_BASE_URL`) | official Graph API — no browser, but **images are mandatory** |
 
 For each configured channel:
 
 ```bash
 cd ${CLAUDE_PLUGIN_ROOT}/scripts/<channel> && node post-api.mjs --skip-done "$CROSSPOST_HOME/posts/<slug>.txt"
 ```
+
+### Instagram is not a text channel
+
+Every other channel takes the post body. Instagram takes **images**, and its API fetches them
+from a public URL rather than accepting an upload — so it needs two extra steps and it fails
+loudly instead of falling back to text.
+
+1. **Write a card spec** to `$CROSSPOST_HOME/cards/<slug>.json`. You write this, not a
+   sub-tool. Aim for 4–8 cards; card 1 is a cover and is the only card most people see:
+
+   ```json
+   { "format": "carousel", "subject": "<short label for the footer>",
+     "cards": [
+       { "type": "cover",     "eyebrow": "…", "headline": "…", "sub": "…", "invert": true },
+       { "type": "stat",      "value": "3.4s", "label": "…", "note": "…" },
+       { "type": "body",      "heading": "…", "items": ["…", "…"] },
+       { "type": "checklist", "heading": "…", "items": ["…"] },
+       { "type": "quote",     "quote": "…", "attribution": "…" } ] }
+   ```
+
+   Keep every line inside the caps in `scripts/instagram/card-rules.mjs` — the renderer rejects
+   the spec otherwise, and it also fails when text overflows its box at render time.
+
+2. **Write the caption** to `$CROSSPOST_HOME/posts/<slug>.insta.txt`: 600–850 characters, the
+   first line matching the canonical post's opening line, and **the canonical URL spelled out**.
+   Links are not clickable on Instagram, but that address is the only route from the post to the
+   full article. The feed truncates near 125 characters, so front-load it.
+
+3. **Render, gate, publish:**
+
+   ```bash
+   cd ${CLAUDE_PLUGIN_ROOT}/scripts/instagram
+   node gen-cards.mjs <slug>                  # or: --reels && node gen-reel.mjs <slug>
+   # publish $CROSSPOST_HOME/media/<slug>/ to the user's public host
+   node check-cards.mjs <slug>
+   node post-api.mjs <slug> --dry-run         # containers only — proves Meta can fetch the URLs
+   node post-api.mjs <slug> --skip-done
+   ```
+
+**Nothing here is fixable after publishing.** Media cannot be replaced, and a caption edit is
+accepted by the API and then frequently ignored. Treat `check-cards.mjs` and `--dry-run` as the
+real gate, and look at the rendered images before publishing.
+
+Carousel or reel? Use a **carousel** when the content rewards stopping — code, a comparison, a
+checklist. Use a **reel** when the claim compresses to one sentence and the cards carry numbers
+or contrast; a reel gets no second read.
 
 `--skip-done` prevents duplicate posts (each channel keeps its own ledger). Pass the
 **canonical** path even when variants exist — the script picks the right body.
@@ -231,6 +278,7 @@ foreground, then `wait`.
 ( cd ${CLAUDE_PLUGIN_ROOT}/scripts/facebook   && node stats.mjs ) &
 ( cd ${CLAUDE_PLUGIN_ROOT}/scripts/x          && node stats.mjs ) &
 ( cd ${CLAUDE_PLUGIN_ROOT}/scripts/brunch     && node stats.mjs ) &
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/instagram  && node stats.mjs ) &
 # CDP
 cd ${CLAUDE_PLUGIN_ROOT}/scripts/facebook && node fb-reach.mjs
 wait
@@ -246,6 +294,9 @@ Platform quirks to note under the table:
 - **Naver views finalize daily**, so a post published today shows 0 until the next day.
 - **Threads comment counts** can be inflated by chain-continuation chunks counted as replies —
   not real external comments.
+- **Instagram insights need `instagram_manage_insights`.** Without it views/reach/saved/shares
+  read `—` while likes and comments still work. Re-consenting without editing the app's permission
+  set re-applies the OLD scopes — it looks like it worked and changes nothing.
 - **Facebook reports views, not reach.** Impressions/reach are deprecated in the Graph API AND
   Meta removed reach from Business Suite for content published after 2025-07-31, so `fb-reach.mjs`
   scrapes the Business Suite content table for view counts; engagement comes from `stats.mjs`.

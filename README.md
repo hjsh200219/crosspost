@@ -4,7 +4,7 @@
 
 **Write once, publish everywhere.** Draft a single canonical post in your own brand voice, then
 cross-post it to every channel you've configured — LinkedIn, Facebook, Threads, X, Remember,
-Brunch, and Naver Blog — with per-channel body variants, unified stats, and edit/delete support.
+Brunch, Naver Blog, and Instagram — with per-channel body variants, unified stats, and edit/delete support.
 
 A [Claude Code](https://claude.com/claude-code) plugin. You drive it with **`/crosspost:publish`**
 (or just `/publish` when the name is unambiguous); Claude handles the drafting, the per-channel
@@ -77,6 +77,7 @@ comes from. Fill in only the channels you want — set a channel's key variable 
 | Remember | Capture the bearer token from a logged-in Remember Connect session (**unofficial**) | `REMEMBER_TOKEN`, `REMEMBER_PROFILE_ID` |
 | Brunch | `npm run browser` at the plugin root, log in once via Kakao | persistent profile (+ optional `BRUNCH_COOKIE`) |
 | Naver Blog | `npm run browser`, log into Naver once (publishing is browserless afterwards) | `NAVER_BLOG_ID` |
+| Instagram | Meta app → **Instagram** use case → Business/Creator account linked to a Page → long-lived token | `IG_USER_ID`, `IG_ACCESS_TOKEN`, `CROSSPOST_MEDIA_BASE_URL` |
 
 Then edit **`~/.crosspost/voice.md`** to describe your brand voice — the skill reads it before
 drafting every post. Optional common vars: `CANONICAL_BASE_URL` (adds a "read the full article"
@@ -160,6 +161,41 @@ Set `CROSSPOST_HOME` to relocate it. Optional common vars: `CROSSPOST_CDP_PORT` 
 session cookie captured once from the logged-in browser and stored as `LINKEDIN_COOKIE` /
 `NAVER_COOKIE`; the browser is only re-opened when a cookie expires. Facebook view counts
 (`fb-reach.mjs`) and Brunch still need it.
+
+### Instagram needs images, and a place to put them
+
+Instagram is the one channel that cannot publish text, and its API does not accept binary
+uploads — Meta fetches `image_url` / `video_url` from a **public URL**. So this channel has a
+prerequisite the others don't: somewhere to host the media.
+
+```bash
+# 1. write a card spec (or have Claude write it) → $CROSSPOST_HOME/cards/<slug>.json
+node scripts/instagram/gen-cards.mjs <slug>              # → $CROSSPOST_HOME/media/<slug>/card-NN.jpg
+node scripts/instagram/gen-cards.mjs <slug> --reels      # → build/<slug>/reel-NN.jpg
+node scripts/instagram/gen-reel.mjs  <slug>              # → media/<slug>/reel.mp4  (needs ffmpeg)
+
+# 2. publish that media directory somewhere public, then point the base URL at it
+#    CROSSPOST_MEDIA_BASE_URL=https://example.com/media
+
+# 3. gate, then publish
+node scripts/instagram/check-cards.mjs <slug>
+node scripts/instagram/post-api.mjs   <slug> --dry-run   # builds containers: proves Meta can fetch every URL
+node scripts/instagram/post-api.mjs   <slug>
+```
+
+Already have images? Skip the generator: list their URLs in
+`$CROSSPOST_HOME/posts/<slug>.insta.media` (one per line) or pass `--media a.jpg,b.jpg`.
+
+Cards render with a neutral theme and system fonts — nothing is fetched at render time. Override
+any token in `$CROSSPOST_HOME/cards.theme.json`:
+
+```json
+{ "ink": "#12151a", "paper": "#faf9f6", "accent": "#c2410c", "fontStack": "'Inter', sans-serif" }
+```
+
+**Check before you publish.** Instagram cannot replace media after publishing and, in practice,
+cannot change a caption either — `check-cards.mjs` is the last mechanical defence, and everything
+it catches would otherwise be permanent.
 
 **`FACEBOOK_PAGE_ASSET_ID`** — Business Suite keys its Insights view by the Page's *classic* id,
 which on New Pages Experience differs from the display id used elsewhere. If `fb-reach.mjs` says
@@ -274,6 +310,7 @@ MIT — see [LICENSE](./LICENSE).
 | 리멤버 | 로그인된 리멤버 커넥트 세션에서 bearer 토큰 캡처 (**비공식**) | `REMEMBER_TOKEN`, `REMEMBER_PROFILE_ID` |
 | 브런치 | 플러그인 루트에서 `npm run browser`, 카카오로 1회 로그인 | 유지 프로필 (+ 선택 `BRUNCH_COOKIE`) |
 | 네이버 블로그 | `npm run browser`, 네이버 1회 로그인(이후 발행은 브라우저 없이) | `NAVER_BLOG_ID` |
+| Instagram | Meta 앱 → **Instagram** 이용 사례 → 페이지 연결된 비즈니스/크리에이터 계정 → 장기 토큰 | `IG_USER_ID`, `IG_ACCESS_TOKEN`, `CROSSPOST_MEDIA_BASE_URL` |
 
 이후 **`~/.crosspost/voice.md`**를 편집해 본인 브랜드 보이스를 기술한다 — 스킬이 매 발행 전 이 파일을
 읽는다. 선택적 공통 변수: `CANONICAL_BASE_URL`(본인 사이트로 되돌아가는 "원문 보기" 트레일러 추가,
