@@ -65,6 +65,14 @@ test('Brunch --skip-done exits before CDP access', () => {
   assert.match(result.stdout, /skip \(already published\)/);
 });
 
+test('Brunch --skip-done fails closed when its ledger is malformed', () => {
+  writeFileSync(join(ledgers, 'published-brunch.json'), '{not-json');
+  const result = run('scripts/brunch/post-api.mjs', ['--skip-done', post]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot read Brunch ledger/);
+  assert.doesNotMatch(result.stderr, /connectOverCDP/);
+});
+
 test('Remember generic entrypoint honors --skip-done', () => {
   writeFileSync(
     join(ledgers, 'published-remember.jsonl'),

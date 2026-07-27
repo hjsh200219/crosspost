@@ -92,7 +92,12 @@ if (!deleteId && !file) {
 if (skipDone && file && !editArticleNo) {
   let ledger = [];
   if (existsSync(LEDGER)) {
-    try { ledger = JSON.parse(readFileSync(LEDGER, 'utf8')); } catch {}
+    try {
+      ledger = JSON.parse(readFileSync(LEDGER, 'utf8'));
+    } catch (error) {
+      console.error(`cannot read Brunch ledger: ${error.message}`);
+      process.exit(1);
+    }
   }
   const base = path.basename(file);
   if (ledger.some((entry) => path.basename(entry.file || '') === base)) {
