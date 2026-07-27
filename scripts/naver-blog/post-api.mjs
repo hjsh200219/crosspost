@@ -1,9 +1,14 @@
-// Naver blog publisher (SE-ONE UI automation over the logged-in CDP profile).
-// There is no official write API — Naver shut the old OAuth writePost.json path
-// down in 2020 — so this drives the real SmartEditor ONE web UI.
+// Naver blog publisher. There is no official write API — Naver shut the old OAuth
+// writePost.json path down in 2020 — but the SmartEditor ONE editor is a thin client over
+// four ordinary endpoints that answer a plain cookie'd request, so **publishing is
+// browserless as of 2026-07-27** (see http-publish.mjs). That drops ~10 brittle DOM
+// selectors and the 60~90s editor drive from the publish path; `--ui` keeps the old
+// automation as a fallback, and --edit/--delete still drive it.
 //
 //   node post-api.mjs <file>                    # publish (category defaults to 게시판)
 //   node post-api.mjs <file> --category "..."   # override category
+//   node post-api.mjs <file> --ui               # publish via the old SE-ONE UI automation
+//   node post-api.mjs <file> --private          # publish privately (verification run; no ledger write)
 //   node post-api.mjs --edit <logNo> <file>     # replace a published post in place (same logNo/url)
 //   node post-api.mjs --delete <logNo>          # delete a post
 //   node post-api.mjs <file> --dry               # fill + screenshot, do not publish
@@ -16,11 +21,14 @@
 // appended. A sibling cover image (same basename, .png/.jpg/.jpeg/.webp) auto-attaches
 // unless --image is given.
 import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { chromium } from 'playwright';
 import { connect, acquirePage, releasePage } from './cdp.mjs';
-import { loadEnv, dataPath } from '../lib/env.mjs';
+import { loadEnv, dataPath, cdpPort } from '../lib/env.mjs';
 import { readPostBody } from '../lib/post-body.mjs';
 import { canonicalLink, slugFromFile, linkText } from '../lib/canonical-link.mjs';
 import { resolveImage } from '../lib/post-image.mjs';
+import { resolveCookie } from '../lib/site-cookie.mjs';
+import { seToken, categoryMap, uploadImage, buildDocumentModel, publishDocument, readDocument } from './http-publish.mjs';
 
 loadEnv();
 
@@ -205,13 +213,64 @@ async function withBrowser(fn) {
   finally { await releasePage(page); await browser.close().catch(() => {}); }
 }
 
+// ---------- browserless publish (default) ----------
+const naverCookie = () => resolveCookie({
+  key: 'NAVER_COOKIE', port: cdpPort(), chromium,
+  origins: ['https://blog.naver.com', 'https://blog.stat.naver.com', 'https://naver.com'],
+  names: ['NID_AUT', 'NID_SES', 'NID_JST', 'NNB'],
+});
+
+async function doPublishHttp(file, categoryOverride, imageOverride, tagsOverride, { openType = 2 } = {}) {
+  const post = loadPost(file);
+  const slug = slugFromFile(file) || file;
+  const category = categoryOverride || DEFAULT_CATEGORY;
+  const canonicalUrl = canonicalLink(file);
+  const imageAbs = coverImage(file, imageOverride);
+  console.log(`publish(http): ${post.title} → ${category} | image=${imageAbs ? 'yes' : 'no'}`);
+
+  const { cookie, src } = await naverCookie();
+  const jwt = await seToken(cookie, BLOG_ID);
+  const cats = await categoryMap(cookie, BLOG_ID);
+  const categoryNo = cats.get(category);
+  if (categoryNo == null) {
+    throw new Error(`no board named "${category}" — available: ${[...cats.keys()].join(' / ')}`);
+  }
+
+  let cover = null;
+  if (imageAbs && existsSync(imageAbs)) {
+    cover = await uploadImage(cookie, jwt, BLOG_ID, imageAbs);
+    console.log(`  uploaded image: ${imageAbs.replace(/^.*\//, '')}`);
+  }
+
+  const trailer = canonicalUrl ? `${linkText()}: ${canonicalUrl}` : null;
+  const documentModel = buildDocumentModel({ title: post.title, body: post.body, cover, trailer });
+  const tags = resolveTags(file, tagsOverride);
+  const logNo = await publishDocument({ cookie, blogId: BLOG_ID, documentModel, categoryNo, tags, openType });
+
+  // verify by reading the document back — `isSuccess` alone is not proof it rendered
+  const live = await readDocument(cookie, BLOG_ID, logNo);
+  const want = documentModel.document.components.length;
+  if (!live || live.length !== want) {
+    throw new Error(`publish verification failed (logNo ${logNo}): ${live ? live.length : 'null'} components, expected ${want}`);
+  }
+
+  const url = `https://blog.naver.com/${BLOG_ID}/${logNo}`;
+  // A private publish is a verification run — never touch the ledger, or it overwrites the
+  // real post's logNo for this slug and every later stats/edit call follows the ghost.
+  if (openType === 2) {
+    recordLedger({ slug, logNo, url, category, title: post.title, date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()) });
+  }
+  console.log(`PUBLISHED → ${url}  (${want} components · ${tags.length} tags · cookie: ${src}${openType === 0 ? ' · private' : ''})`);
+  return logNo;
+}
+
 async function doPublish(file, categoryOverride, imageOverride, tagsOverride) {
   const post = loadPost(file);
   const slug = slugFromFile(file) || file;
   const category = categoryOverride || DEFAULT_CATEGORY;
   const canonicalUrl = canonicalLink(file);
   const image = coverImage(file, imageOverride);
-  console.log(`publish: ${post.title} → ${category} | image=${image ? 'yes' : 'no'}`);
+  console.log(`publish(ui): ${post.title} → ${category} | image=${image ? 'yes' : 'no'}`);
   return withBrowser(async () => {
     await page.goto(`https://blog.naver.com/${BLOG_ID}?Redirect=Write&`, { waitUntil: 'domcontentloaded', timeout: 40000 });
     await page.waitForTimeout(8500); // SE-ONE 초기 레이아웃 settle 대기 (6s는 제목 클릭 "not stable" 유발)
@@ -282,8 +341,13 @@ async function doDelete(logNo) {
   return withBrowser(async () => {
     // Owner delete: the post's 삭제 link is `a._deletePost` (`_param(<logNo>|..)`), hidden
     // in a menu, so a Playwright visibility-gated click times out. Fire its Naver handler
-    // in-page instead → confirm dialog ("삭제된 글은 복구할 수 없습니다") auto-accepted by
-    // withBrowser → POST /PostDelete.naver removes the post.
+    // in-page instead → confirm → POST /PostDelete.naver.
+    //
+    // The confirm must be neutralized IN THE PAGE, not by a dialog handler. The CDP browser
+    // is shared with the other channels, and whichever consumer answers a native dialog first
+    // wins — in practice the confirm gets dismissed (= cancel) before our accept lands, so the
+    // delete never fires while the run still prints success (2026-07-27: two consecutive
+    // deletes reported success with the post still live).
     let deletedAlert = false;
     page.on('dialog', (d) => { if (/삭제되었거나|존재하지 않/.test(d.message())) deletedAlert = true; });
     await page.goto(`https://blog.naver.com/${BLOG_ID}/${logNo}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -291,15 +355,24 @@ async function doDelete(logNo) {
     const fr = page.frames().find((f) => /PostView/i.test(f.url())) || page.mainFrame();
     const has = await fr.evaluate(() => !!document.querySelector('a._deletePost')).catch(() => false);
     if (!has) throw new Error(`delete link not found (logNo ${logNo}: not the owner / already deleted / does not exist)`);
-    await fr.evaluate(() => document.querySelector('a._deletePost').click());
-    await page.waitForTimeout(4000);
-    // verify: reloading a deleted post fires the "삭제되었거나" alert
-    await page.goto(`https://blog.naver.com/${BLOG_ID}/${logNo}`, { waitUntil: 'domcontentloaded', timeout: 20000 }).catch(() => {});
-    await page.waitForTimeout(2500);
-    const gone = deletedAlert || new RegExp(`/${BLOG_ID}$|blog\\.naver\\.com/?$`).test(page.url());
+    // the click navigates away, so this evaluate can reject with "context destroyed" —
+    // that rejection means it worked, not that it failed.
+    await fr.evaluate(() => {
+      window.confirm = () => true;
+      document.querySelector('a._deletePost').click();
+    }).catch(() => {});
+    await page.waitForTimeout(5000);
+    // verify: a deleted post no longer renders its title (the alert only fires on some
+    // entry paths, so don't rely on it alone)
+    const gone = await page.evaluate(async (u) => {
+      const r = await fetch(u, { credentials: 'include', cache: 'no-store' });
+      const t = await r.text();
+      return !/<title>[^<]*\S[^<]*: 네이버 블로그<\/title>/.test(t);
+    }, `https://blog.naver.com/PostView.naver?blogId=${BLOG_ID}&logNo=${logNo}`).catch(() => deletedAlert);
+    if (!gone) throw new Error(`delete failed for ${logNo} — the post is still live (ledger left untouched)`);
     const l = readLedger().filter((e) => e.logNo !== logNo);
     writeFileSync(LEDGER, JSON.stringify(l, null, 2) + '\n');
-    console.log(gone ? `DELETED ${logNo} (verified)` : `delete clicked for ${logNo} (verify on the blog recommended)`);
+    console.log(`DELETED ${logNo} (verified)`);
   });
 }
 
@@ -316,6 +389,11 @@ if (editIdx !== -1) {
   await doDelete(delId);
 } else {
   const file = argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && excludesValueOf.includes(argv[i - 1])))[0];
-  if (!file) { console.error('usage: post-api.mjs <file> [--category "..."] [--image <path>] [--tags "a,b,c"] [--dry]'); process.exit(1); }
-  await doPublish(file, flag('--category'), flag('--image'), flag('--tags'));
+  if (!file) { console.error('usage: post-api.mjs <file> [--category "..."] [--image <path>] [--tags "a,b,c"] [--ui] [--private] [--dry]'); process.exit(1); }
+  if (argv.includes('--ui') || DRY) {
+    // --dry fills the editor and screenshots it, so it only means anything on the UI path
+    await doPublish(file, flag('--category'), flag('--image'), flag('--tags'));
+  } else {
+    await doPublishHttp(file, flag('--category'), flag('--image'), flag('--tags'), { openType: argv.includes('--private') ? 0 : 2 });
+  }
 }

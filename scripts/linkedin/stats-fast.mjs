@@ -10,8 +10,12 @@
 // vs the title and duplicated across runs (totals 1123/830/977 disagreed, 2026-06-28).
 //
 // LinkedIn standard-tier tokens are write-only (socialActions GET = 403) and counts moved
-// behind rotating graphql queryIds, so a pure-fetch path is unreachable — the analytics-page
-// DOM is the reliable source. A logged-in CDP Chromium session (launch-browser.sh) is required.
+// behind rotating graphql queryIds, so the analytics page is the only reliable source — but
+// it does NOT need a browser: the page is server-rendered, and a plain cookie'd fetch gets the
+// numbers (2026-07-27, 10 posts in 1.5s vs ~48s over CDP). The RSC flight payload embedded in
+// that HTML lists the rendered text nodes IN ORDER, so the same metricFromLines() parser reads
+// both paths. CDP is now only needed for --all (infinite-scroll discovery) and for re-capturing
+// the session cookie when the stored one expires.
 //
 //   node stats-fast.mjs                  # all posts in published-linkedin.json (ledger)
 //   node stats-fast.mjs <urn> [...]      # specific share/activity urns
@@ -24,7 +28,8 @@
 import { chromium } from 'playwright';
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'fs';
 import { publishMs } from '../lib/publish-order.mjs';
-import { parseAccount, accountFile, cdpPort, vanity, label } from './account.mjs';
+import { resolveCookie } from '../lib/site-cookie.mjs';
+import { parseAccount, accountFile, cdpPort, vanity, label, suffix } from './account.mjs';
 
 const { account, rest: ARGV } = parseAccount(process.argv.slice(2));
 // --limit N (default 20; 0 = the whole ledger). Ignored when explicit urn args are given. Flag stripped from ARGV.
@@ -86,6 +91,71 @@ function metricFromLines(lines, label, dir) {
     }
   }
   return null;
+}
+
+// ── browserless path (default) ─────────────────────────────────────────────────────────
+// The analytics page is server-rendered and its RSC flight payload carries every rendered
+// text node as {"children":["<text>"]} IN VISUAL ORDER — i.e. the same line sequence the CDP
+// path read out of document.body.innerText. So metricFromLines() is reused verbatim and the
+// two paths cannot drift apart in how they interpret a label.
+const UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+const COOKIE_KEY = 'LINKEDIN_COOKIE' + suffix(account);
+// li_at alone. Sending the whole profile cookie jar makes LinkedIn answer 400 with an empty
+// body (measured 2026-07-27) — this list is correctness, not thrift.
+const COOKIE_NAMES = ['li_at'];
+
+function rscLines(html) {
+  for (const re of [/children\\":\[\\"((?:[^"\\]|\\.){1,120}?)\\"\]/g, /"children":\["((?:[^"\\]|\\.){1,120}?)"\]/g]) {
+    const out = [...html.matchAll(re)].map((m) => m[1].replace(/\\u003c/g, '<').replace(/\\"/g, '"'));
+    if (out.length > 5) return out;
+  }
+  return [];
+}
+
+async function fetchText(url, cookie) {
+  const r = await fetch(url, {
+    headers: { cookie, 'user-agent': UA, accept: 'text/html,*/*;q=0.8', 'accept-language': 'en-US,en;q=0.9' },
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+}
+
+async function statsForHttp(cookie, entry) {
+  let activityUrn = entry.activityUrn?.startsWith('urn:li:activity:') ? entry.activityUrn
+    : entry.urn.startsWith('urn:li:activity:') ? entry.urn : null;
+  if (!activityUrn) {
+    // the share permalink resolves to the backing activity urn (a deleted post renders a
+    // "Post not found" shell with no activity urn — that surfaces as a hard error, as before)
+    const html = await fetchText(`https://www.linkedin.com/feed/update/${entry.urn}/`, cookie);
+    activityUrn = (html.match(/urn:li:activity:\d+/) || [])[0];
+  }
+  if (!activityUrn) throw new Error('failed to resolve activity urn');
+
+  const lines = rscLines(await fetchText(`https://www.linkedin.com/analytics/post-summary/${activityUrn}/`, cookie));
+  return {
+    activityUrn,
+    impressions: metricFromLines(lines, 'impressions', 'before'),
+    reactions: metricFromLines(lines, 'reactions', 'after') ?? 0,
+    comments: metricFromLines(lines, 'comments', 'after') ?? 0,
+    reposts: metricFromLines(lines, 'reposts', 'after') ?? 0,
+  };
+}
+
+// concurrency pool over plain async tasks (HTTP path — no pages to hand out)
+async function mapPool(items, n, worker) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(n, items.length) }, async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        out[i] = await worker(items[i], i);
+      }
+    }),
+  );
+  return out;
 }
 
 // Resolve the backing activity urn for a share urn (post-summary needs the activity
@@ -212,14 +282,70 @@ if (allMode && !VANITY) {
 const argUrns = allMode ? [] : ARGV;
 const ledger = JSON.parse(readFileSync(LEDGER, 'utf8'));
 
+// Ledger-only targets need no browser at all — only --all does (infinite-scroll discovery).
+function ledgerTargets() {
+  if (argUrns.length) {
+    return ledger.filter((e) => argUrns.includes(e.urn))
+      .concat(argUrns.filter((u) => !ledger.some((e) => e.urn === u)).map((u) => ({ urn: u, file: '-', date: '-' })));
+  }
+  // Default: sort by publish date descending, keep only the most recent LIMIT (fewer
+  // concurrent lookups = faster)
+  const sorted = [...ledger].sort((a, b) => publishMs(b) - publishMs(a));
+  return LIMIT > 0 ? sorted.slice(0, LIMIT) : sorted;
+}
+
+let targets;
+let results;
+
+if (!allMode) {
+  targets = ledgerTargets();
+  let { cookie, src } = await resolveCookie({
+    key: COOKIE_KEY, port: PORT, chromium,
+    origins: ['https://www.linkedin.com'], names: COOKIE_NAMES,
+  });
+
+  const run = async (ck) => mapPool(targets, CONCURRENCY, async (entry) => {
+    let lastErr;
+    for (let attempt = 0; attempt <= RETRIES; attempt++) {
+      try {
+        const s = await statsForHttp(ck, entry);
+        if (s.impressions == null) throw new Error('metrics not loaded');
+        return { ...entry, title: titleOf(entry), ...s };
+      } catch (e) {
+        lastErr = e;
+        if (attempt < RETRIES) await sleep(800 * (attempt + 1));
+      }
+    }
+    return { ...entry, title: titleOf(entry), error: (lastErr?.message || 'unknown').slice(0, 80) };
+  });
+
+  results = await run(cookie);
+  // Every target failing means the session cookie died, not that every post broke — re-capture
+  // from the browser once and retry. Partial failures are real per-post errors; leave them.
+  if (results.length && results.every((r) => r.error) && src === 'env') {
+    console.error('every post failed → re-capturing the session cookie');
+    try {
+      ({ cookie, src } = await resolveCookie({
+        key: COOKIE_KEY, port: PORT, chromium,
+        origins: ['https://www.linkedin.com'], names: COOKIE_NAMES,
+        validate: async () => false, // force a fresh CDP capture, ignore the stored value
+      }));
+      results = await run(cookie);
+    } catch (e) {
+      console.error(`cookie re-capture failed: ${e.message}`);
+    }
+  }
+  console.error(`(cookie: ${src})`);
+} else {
+
 let browser;
 try {
   browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { noDefaults: true });
 } catch {
   console.error(
-    `CDP :${PORT} connection failed — a logged-in browser is required (${label(account)}).\n` +
+    `CDP :${PORT} connection failed — --all discovery needs a logged-in browser (${label(account)}).\n` +
       '  1) npm run browser   (log in once, the session persists for weeks)\n' +
-      '  2) re-run node stats-fast.mjs',
+      '  2) re-run node stats-fast.mjs --all',
   );
   process.exit(2);
 }
@@ -227,8 +353,6 @@ try {
 const ctx = browser.contexts()[0];
 
 // --all needs the activity feed discovered first (single page), THEN stats each in parallel.
-let targets;
-if (allMode) {
   const scrolls = parseInt(ARGV[1] || '25', 10); // adaptive: stops on 2 no-growth rounds
   const page0 = ctx.pages().find((p) => p.url().includes('linkedin.com')) || ctx.pages()[0] || (await ctx.newPage());
   const found = await discoverAll(page0, scrolls);
@@ -238,20 +362,11 @@ if (allMode) {
     const known = ledgerByActivity.get(f.urn);
     return known ? { ...known } : { urn: f.urn, file: '-', date: '', head: f.head };
   });
-} else if (argUrns.length) {
-  targets = ledger.filter((e) => argUrns.includes(e.urn))
-    .concat(argUrns.filter((u) => !ledger.some((e) => e.urn === u)).map((u) => ({ urn: u, file: '-', date: '-' })));
-} else {
-  // Default: sort by publish date descending, keep only the most recent LIMIT (fewer
-  // concurrent lookups = faster)
-  targets = [...ledger].sort((a, b) => publishMs(b) - publishMs(a));
-  if (LIMIT > 0) targets = targets.slice(0, LIMIT);
-}
 
-const pool = [ctx.pages().find((p) => p.url().includes('linkedin.com')) || ctx.pages()[0] || (await ctx.newPage())];
+const pool = [page0];
 while (pool.length < Math.min(CONCURRENCY, targets.length)) pool.push(await ctx.newPage());
 
-const results = await runPool(pool, targets, async (page, entry, i) => {
+results = await runPool(pool, targets, async (page, entry, i) => {
   await sleep((i % CONCURRENCY) * 400); // stagger initial burst to dodge throttling
   let lastErr;
   for (let attempt = 0; attempt <= RETRIES; attempt++) {
@@ -270,6 +385,8 @@ const results = await runPool(pool, targets, async (page, entry, i) => {
 // release any extra pages we opened (keep the first for session reuse)
 for (const p of pool.slice(1)) await p.close().catch(() => {});
 await browser.close();
+
+}
 
 // persist newly resolved activity urns back into the ledger (one-time backfill)
 let ledgerDirty = false;

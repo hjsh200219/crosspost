@@ -71,12 +71,12 @@ comes from. Fill in only the channels you want — set a channel's key variable 
 | Channel | Where to get it | `.env` variables |
 |---------|-----------------|------------------|
 | LinkedIn | [developer.linkedin.com](https://developer.linkedin.com) → app with `w_member_social` scope → member token | `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_PERSON_URN` |
-| Facebook | [developers.facebook.com](https://developers.facebook.com) → app + Page → user token, then `node scripts/facebook/get-page-token.mjs` to exchange for a Page token | `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN` |
+| Facebook | [developers.facebook.com](https://developers.facebook.com) → app + Page → user token, then `node scripts/facebook/get-page-token.mjs` to exchange for a Page token | `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN` (+ `FACEBOOK_PAGE_ASSET_ID` if your Page has a separate classic id — see below) |
 | Threads | Same Meta app → **Threads** use case → token generator | `THREADS_ACCESS_TOKEN`, `THREADS_USER_ID` |
 | X | [developer.x.com](https://developer.x.com) → app → API keys + access tokens with **write** | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` |
 | Remember | Capture the bearer token from a logged-in Remember Connect session (**unofficial**) | `REMEMBER_TOKEN`, `REMEMBER_PROFILE_ID` |
 | Brunch | `npm run browser` at the plugin root, log in once via Kakao | persistent profile (+ optional `BRUNCH_COOKIE`) |
-| Naver Blog | `npm run browser`, log into Naver once | `NAVER_BLOG_ID` |
+| Naver Blog | `npm run browser`, log into Naver once (publishing is browserless afterwards) | `NAVER_BLOG_ID` |
 
 Then edit **`~/.crosspost/voice.md`** to describe your brand voice — the skill reads it before
 drafting every post. Optional common vars: `CANONICAL_BASE_URL` (adds a "read the full article"
@@ -155,6 +155,15 @@ update). Everything is under `$CROSSPOST_HOME` (default `~/.crosspost`):
 
 Set `CROSSPOST_HOME` to relocate it. Optional common vars: `CROSSPOST_CDP_PORT` (default 9224) and
 `CANONICAL_BASE_URL` (prepended to trailer links back to your canonical post; leave empty to disable).
+
+**Browser-free after the first login.** LinkedIn stats, Naver stats and Naver publishing run on a
+session cookie captured once from the logged-in browser and stored as `LINKEDIN_COOKIE` /
+`NAVER_COOKIE`; the browser is only re-opened when a cookie expires. Facebook view counts
+(`fb-reach.mjs`) and Brunch still need it.
+
+**`FACEBOOK_PAGE_ASSET_ID`** — Business Suite keys its Insights view by the Page's *classic* id,
+which on New Pages Experience differs from the display id used elsewhere. If `fb-reach.mjs` says
+the content table is unavailable, set this to the id that prefixes your ledger's `<pageId>_<postId>`.
 
 ## FAQ
 
@@ -259,12 +268,12 @@ MIT — see [LICENSE](./LICENSE).
 | 채널 | 발급처 | `.env` 변수 |
 |------|--------|-------------|
 | LinkedIn | [developer.linkedin.com](https://developer.linkedin.com) → `w_member_social` 스코프 앱 → 멤버 토큰 | `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_PERSON_URN` |
-| Facebook | [developers.facebook.com](https://developers.facebook.com) → 앱 + 페이지 → 사용자 토큰, 이후 `node scripts/facebook/get-page-token.mjs`로 Page 토큰 교환 | `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN` |
+| Facebook | [developers.facebook.com](https://developers.facebook.com) → 앱 + 페이지 → 사용자 토큰, 이후 `node scripts/facebook/get-page-token.mjs`로 Page 토큰 교환 | `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN` (페이지에 classic id가 따로 있으면 `FACEBOOK_PAGE_ASSET_ID`) |
 | Threads | 동일 Meta 앱 → **Threads** 유스케이스 → 토큰 생성기 | `THREADS_ACCESS_TOKEN`, `THREADS_USER_ID` |
 | X | [developer.x.com](https://developer.x.com) → 앱 → **쓰기** 권한 API 키 + 액세스 토큰 | `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_SECRET` |
 | 리멤버 | 로그인된 리멤버 커넥트 세션에서 bearer 토큰 캡처 (**비공식**) | `REMEMBER_TOKEN`, `REMEMBER_PROFILE_ID` |
 | 브런치 | 플러그인 루트에서 `npm run browser`, 카카오로 1회 로그인 | 유지 프로필 (+ 선택 `BRUNCH_COOKIE`) |
-| 네이버 블로그 | `npm run browser`, 네이버 1회 로그인 | `NAVER_BLOG_ID` |
+| 네이버 블로그 | `npm run browser`, 네이버 1회 로그인(이후 발행은 브라우저 없이) | `NAVER_BLOG_ID` |
 
 이후 **`~/.crosspost/voice.md`**를 편집해 본인 브랜드 보이스를 기술한다 — 스킬이 매 발행 전 이 파일을
 읽는다. 선택적 공통 변수: `CANONICAL_BASE_URL`(본인 사이트로 되돌아가는 "원문 보기" 트레일러 추가,

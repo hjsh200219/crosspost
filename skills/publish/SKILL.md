@@ -176,7 +176,7 @@ env vars present in `$CROSSPOST_HOME/.env`:
 | X | `X_API_KEY` / `X_API_SECRET` / `X_ACCESS_TOKEN` / `X_ACCESS_SECRET` | official API v2 — no browser |
 | Remember | `REMEMBER_TOKEN` | unofficial API (experimental) — no browser |
 | Brunch | `BRUNCH_COOKIE` | browser session (CDP) |
-| Naver Blog | `NAVER_BLOG_ID` | browser session (CDP) |
+| Naver Blog | `NAVER_BLOG_ID` | session cookie — no browser (`--ui` falls back to the editor) |
 
 For each configured channel:
 
@@ -188,6 +188,10 @@ cd ${CLAUDE_PLUGIN_ROOT}/scripts/<channel> && node post-api.mjs --skip-done "$CR
 **canonical** path even when variants exist — the script picks the right body.
 
 - **API channels** (linkedin, facebook, threads, x, remember) need no browser.
+- **Naver Blog also needs no browser to publish** (2026-07-27): the SmartEditor endpoints answer a
+  cookie'd request, so a post goes out in ~3s instead of a 60~90s editor drive. The browser is only
+  used to capture `NAVER_COOKIE` the first time and to re-capture it when it expires — plus
+  `--edit`/`--delete`, which still drive the editor.
 - **Browser channels** (brunch, naver-blog) need the shared CDP browser running:
   ```bash
   cd ${CLAUDE_PLUGIN_ROOT} && npm run browser
@@ -206,26 +210,28 @@ cd ${CLAUDE_PLUGIN_ROOT}/scripts/<channel> && node post-api.mjs --skip-done "$CR
 
 Read each channel's ledger and query current metrics. **Two groups, run differently:**
 
-- **Browserless group — safe to run in parallel** (`&` background): `remember`, `threads`,
-  `facebook` (engagement via `stats.mjs`), `x`. Each is a direct API call.
-- **CDP group — shares ONE browser, run strictly sequentially, one at a time**: `linkedin`
-  (`stats-fast.mjs`), `brunch` (`stats.mjs`), `naver` (`stats.mjs`), `facebook` reach
-  (`fb-reach.mjs`). These do per-item in-page fetches on the shared CDP browser; running two at
-  once makes the fetches race and drop results (null/missing metrics). Never `&` these together.
+- **Browserless group — safe to run in parallel** (`&` background): `linkedin`
+  (`stats-fast.mjs`), `naver` (`stats.mjs`), `remember`, `threads`, `facebook` engagement
+  (`stats.mjs`), `x`. LinkedIn and Naver joined this group on 2026-07-27 — the LinkedIn
+  analytics page is server-rendered and Naver's cross-origin wall is CORS, which only exists in
+  a browser. Both now run on a stored session cookie (10 posts in ~1.5s and ~0.9s).
+- **CDP group — needs the shared browser**: `facebook` reach (`fb-reach.mjs`), and `brunch`
+  (`stats.mjs`) when its cookie has expired and it self-heals. Run these one at a time; they
+  drive one browser and racing them drops results.
 
-Recommended pattern: fire the four browserless jobs in the background, then run the CDP jobs
-one after another in the foreground, then `wait`.
+Recommended pattern: fire the browserless jobs in the background, run `fb-reach` in the
+foreground, then `wait`.
 
 ```bash
 # browserless (parallel)
-( cd ${CLAUDE_PLUGIN_ROOT}/scripts/remember && node stats.mjs ) &
-( cd ${CLAUDE_PLUGIN_ROOT}/scripts/threads  && node stats.mjs ) &
-( cd ${CLAUDE_PLUGIN_ROOT}/scripts/facebook && node stats.mjs ) &
-( cd ${CLAUDE_PLUGIN_ROOT}/scripts/x        && node stats.mjs ) &
-# CDP (sequential — one browser)
-cd ${CLAUDE_PLUGIN_ROOT}/scripts/linkedin && node stats-fast.mjs
-cd ${CLAUDE_PLUGIN_ROOT}/scripts/brunch   && node stats.mjs
-cd ${CLAUDE_PLUGIN_ROOT}/scripts/naver-blog && node stats.mjs
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/linkedin   && node stats-fast.mjs ) &
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/naver-blog && node stats.mjs ) &
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/remember   && node stats.mjs ) &
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/threads    && node stats.mjs ) &
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/facebook   && node stats.mjs ) &
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/x          && node stats.mjs ) &
+( cd ${CLAUDE_PLUGIN_ROOT}/scripts/brunch     && node stats.mjs ) &
+# CDP
 cd ${CLAUDE_PLUGIN_ROOT}/scripts/facebook && node fb-reach.mjs
 wait
 ```
@@ -240,8 +246,11 @@ Platform quirks to note under the table:
 - **Naver views finalize daily**, so a post published today shows 0 until the next day.
 - **Threads comment counts** can be inflated by chain-continuation chunks counted as replies —
   not real external comments.
-- **Facebook reach/impressions are unavailable via the Graph API** (metrics deprecated); reach
-  comes from the CDP `fb-reach.mjs` page scrape, engagement from `stats.mjs`.
+- **Facebook reports views, not reach.** Impressions/reach are deprecated in the Graph API AND
+  Meta removed reach from Business Suite for content published after 2025-07-31, so `fb-reach.mjs`
+  scrapes the Business Suite content table for view counts; engagement comes from `stats.mjs`.
+  That table also lists a connected Instagram account's rows, which carry the same opening line —
+  the scraper filters by each row's platform badge, so don't "simplify" it to caption matching.
 
 ---
 
