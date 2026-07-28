@@ -61,15 +61,18 @@ export async function resolveCookie({ key, port = 9224, origins, names, validate
   const fromEnv = envCookie(key);
   if (fromEnv && (!validate || (await validate(fromEnv)))) return { cookie: fromEnv, src: 'env' };
 
+  // 여기 도달했는데 validate가 있었다면 fromEnv는 방금 검증에 실패한 쿠키다. 그걸 다시
+  // 돌려주면 호출자가 죽은 세션으로 전량 재시도하고, 정작 필요한 안내("로그인된 브라우저가
+  // 필요하다")는 삼켜진다. validate 없는 호출자만 기존의 best-effort 폴백을 유지한다.
   let fresh = null;
   try {
     fresh = await captureCookieViaCDP({ port, origins, names, chromium });
   } catch (e) {
-    if (fromEnv) return { cookie: fromEnv, src: 'env (stale; CDP capture failed)' };
+    if (fromEnv && !validate) return { cookie: fromEnv, src: 'env (stale; CDP capture failed)' };
     throw new Error(`CDP :${port} cookie capture failed — a logged-in browser is required (${e.message.slice(0, 60)})`);
   }
   if (!fresh) {
-    if (fromEnv) return { cookie: fromEnv, src: 'env (stale; no cookie in profile)' };
+    if (fromEnv && !validate) return { cookie: fromEnv, src: 'env (stale; no cookie in profile)' };
     throw new Error(`no ${names.join('/')} cookie in the CDP :${port} profile — log in to the site first`);
   }
   if (validate && !(await validate(fresh))) {

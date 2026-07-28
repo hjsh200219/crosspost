@@ -69,12 +69,20 @@ const ll = await j(
 console.log('long-lived user token acquired (expires_in:', ll.expires_in ?? 'n/a', ')');
 
 // 2) list managed pages -> find our page -> permanent page token
-const accts = await j(`${GRAPH}/me/accounts?access_token=${encodeURIComponent(ll.access_token)}`);
-const page = (accts.data || []).find((p) => String(p.id) === String(pageId));
+// /me/accounts는 페이지네이션되는 edge다 — 첫 페이지만 보면 관리 중인 Page를
+// "관리하지 않는다"고 잘못 보고하고 셋업이 막힌다. 커서를 끝까지 따라간다.
+const pages = [];
+let next = `${GRAPH}/me/accounts?limit=100&access_token=${encodeURIComponent(ll.access_token)}`;
+while (next) {
+  const chunk = await j(next);
+  pages.push(...(chunk.data || []));
+  next = chunk.paging?.next || null;
+}
+const page = pages.find((p) => String(p.id) === String(pageId));
 if (!page) {
   console.error(
     'page', pageId, 'not in /me/accounts. managed pages:',
-    (accts.data || []).map((p) => `${p.name}:${p.id}`).join(', ') || '(none)',
+    pages.map((p) => `${p.name}:${p.id}`).join(', ') || '(none)',
   );
   process.exit(2);
 }

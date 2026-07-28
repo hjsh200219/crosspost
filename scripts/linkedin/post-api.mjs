@@ -130,7 +130,9 @@ function apiVersions(back = 14) {
 }
 
 async function edit(urn, text) {
-  const escaped = text.replace(/([(){}<>\[\]*_~|@])/g, '\\$1');
+  // 백슬래시가 클래스의 첫 항목이어야 한다 — 빠지면 본문의 리터럴 `\`가 뒤 문자의
+  // 이스케이프로 재해석돼 깨진다. `#`는 해시태그 렌더링을 살리려 일부러 제외.
+  const escaped = text.replace(/([\\(){}<>\[\]*_~|@])/g, '\\$1');
   let last = '';
   for (const version of apiVersions()) {
     const res = await fetch(`https://api.linkedin.com/rest/posts/${encodeURIComponent(urn)}`, {
@@ -187,11 +189,17 @@ let IMAGE = null;
 }
 
 if (argv[0] === '--at') {
+  // 큐 항목에는 이미지 필드가 없다 — 예약 발행은 본문 + 형제 커버 이미지 자동 해석만 한다.
+  // 조용히 무시하면 사용자가 지정한 이미지 없이 몇 시간 뒤 발행된다. 크게 실패시킨다.
+  if (IMAGE) {
+    console.error('--image is not supported with --at — the scheduler publishes text plus an auto-resolved sibling image only');
+    process.exit(1);
+  }
   const when = argv[1];
   let rest = argv.slice(2), comment;
   const ci = rest.indexOf('--comment');
   if (ci >= 0) { comment = rest[ci + 1]; rest = [...rest.slice(0, ci), ...rest.slice(ci + 2)]; }
-  if (!when || !rest.length) { console.error('usage: post-api.mjs --at "YYYY-MM-DD HH:MM" [--comment "..."] <file...>'); process.exit(1); }
+  if (!when || !rest.length) { console.error('usage: post-api.mjs --at "YYYY-MM-DD HH:MM" [--comment "..."] <file...>  (no --image)'); process.exit(1); }
   for (const f of rest) enqueue(f, when, comment);
 } else if (argv[0] === '--selftest') {
   const urn = await publish('crosspost API connection test (will be deleted automatically).');

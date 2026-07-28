@@ -192,7 +192,9 @@ async function editPost(auth, id, content) {
     },
     // PUT /v1/posts/:id 로 #update (검증 2026-07-11). 발행과 동일한 전체 바디 필수 —
     // { content }만 보내면 "올바른 요청이 아닙니다" 거부. (PATCH·POST-to-id는 "method not supported".)
-    body: JSON.stringify({ content, attachments: [], og: null, topic_id: 1 }),
+    // topic_id는 발행 경로와 같게 --topic-id를 따른다(하드코딩하면 수정 시 글이 조용히
+    // 다른 주제로 옮겨간다). API가 전체 바디를 요구하므로 수정에도 매번 다시 실어야 한다.
+    body: JSON.stringify({ content, attachments: [], og: null, topic_id: topicId }),
   });
   const txt = await r.text();
   if (r.status !== 200 && r.status !== 201 && r.status !== 204) {
@@ -264,12 +266,12 @@ if (imagePath && !DRY) {
   }
 }
 
-let ok = 0, published = 0;
+let ok = 0, published = 0, failed = 0;
 for (let i = 0; i < files.length; i++) {
   const file = files[i];
   if (skipDone && done.has(path.basename(file))) { console.log(`${file}: skip (already in ledger)`); ok++; continue; }
   const fp = path.isAbsolute(file) ? file : path.resolve(file);
-  if (!existsSync(fp)) { console.error(`${file}: FAILED - file not found`); continue; }
+  if (!existsSync(fp)) { console.error(`${file}: FAILED - file not found`); failed++; continue; }
   let content = readFileSync(fp, 'utf8').trim();
   // 원문 링크 트레일러: CANONICAL_BASE_URL이 설정돼 있으면 파일명에서 유도한 slug로
   // 링크를 본문 말미에 붙인다 (미설정이면 링크 없이 게시).
@@ -312,6 +314,7 @@ for (let i = 0; i < files.length; i++) {
       if (e.status === 401 && authSrc === 'env' && await refreshViaCDP()) continue;
       console.error(`${file}: FAILED - ${e.message}`);
       if (e.status === 401) console.error('  → token expired and CDP fallback unavailable. Refresh REMEMBER_TOKEN or run npm run browser to log in.');
+      failed++;
       break;
     }
   }
@@ -324,4 +327,5 @@ for (let i = 0; i < files.length; i++) {
   }
 }
 console.log(`done: ${ok}/${files.length}`);
-process.exit(ok === files.length ? 0 : 3);
+// --max로 일찍 멈춘 실행은 실패가 아니다 — ok < files.length로 추론하지 말고 실제 실패만 센다
+process.exit(failed === 0 ? 0 : 3);

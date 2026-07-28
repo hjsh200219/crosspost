@@ -100,8 +100,10 @@ if (skipDone && file && !editArticleNo) {
     }
   }
   const base = path.basename(file);
-  if (ledger.some((entry) => path.basename(entry.file || '') === base)) {
-    console.log(`${base}: skip (already published)`);
+  // status까지 대조한다 — draft 항목을 publish 실행의 "이미 완료"로 보면 초안이
+  // 정식 발행으로 승격될 길이 영영 막힌다. 구 장부의 status 없는 항목은 publish로 본다.
+  if (ledger.some((entry) => path.basename(entry.file || '') === base && (entry.status || 'publish') === status)) {
+    console.log(`${base}: skip (already ${status === 'draft' ? 'drafted' : 'published'})`);
     process.exit(0);
   }
 }

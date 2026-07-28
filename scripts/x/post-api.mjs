@@ -54,16 +54,23 @@ function authHeader(method, url) {
   return 'OAuth ' + Object.keys(oauth).sort().map((k) => `${enc(k)}="${enc(oauth[k])}"`).join(', ');
 }
 
-// --- X weighted character count: CJK (Korean/Chinese/Japanese, etc.) = 2, everything else = 1 ---
+// --- X weighted character count (twitter-text configV3) ---
+// 규칙은 "CJK만 2"가 아니라 그 반대다: 기본 2이고, weight 1은 U+0000–U+10FF와
+// General Punctuation 세 구간뿐이다. 이모지는 grapheme 단위로 2 — ZWJ·variation
+// selector로 이어진 시퀀스도 통째로 2이지 코드포인트마다 2가 아니다.
+// 예전 구현은 이모지·기호를 1로 세서 예산을 과소 계상했고, 그만큼 덜 잘라
+// 실제 280을 넘긴 트윗이 나갔다(비프리미엄 계정에선 그대로 발행 실패).
+// `\p{RGI_Emoji}`가 더 정확하지만 v 플래그는 Node 20+ 전용이고 구문 오류는 parse 시점에
+// 스크립트 전체를 죽인다 — 배포물이라 Node 16+에서 도는 Extended_Pictographic을 쓴다.
+const GRAPHEMES = new Intl.Segmenter('und', { granularity: 'grapheme' });
+const PICTOGRAPHIC = /\p{Extended_Pictographic}/u;
+const lightCp = (c) => c <= 0x10FF || (c >= 0x2000 && c <= 0x200D) ||
+  (c >= 0x2010 && c <= 0x201F) || (c >= 0x2032 && c <= 0x2037);
 function weight(text) {
   let w = 0;
-  for (const ch of text) {
-    const c = ch.codePointAt(0);
-    const cjk = (c >= 0x1100 && c <= 0x11FF) || (c >= 0x2E80 && c <= 0x303E) || (c >= 0x3041 && c <= 0x33FF) ||
-      (c >= 0x3400 && c <= 0x4DBF) || (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0xA000 && c <= 0xA4CF) ||
-      (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F) ||
-      (c >= 0xFF00 && c <= 0xFF60) || (c >= 0xFFE0 && c <= 0xFFE6) || (c >= 0x20000 && c <= 0x3FFFD);
-    w += cjk ? 2 : 1;
+  for (const { segment } of GRAPHEMES.segment(text)) {
+    if (PICTOGRAPHIC.test(segment)) { w += 2; continue; } // 이모지 시퀀스 전체가 2
+    for (const ch of segment) w += lightCp(ch.codePointAt(0)) ? 1 : 2;
   }
   return w;
 }

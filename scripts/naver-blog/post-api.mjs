@@ -349,6 +349,12 @@ async function doEdit(logNo, file, categoryOverride, imageOverride, tagsOverride
     if (DRY) { console.log('--dry: not updating'); return; }
     await frame.locator('button[class*="confirm_btn__"]').first().click();
     await page.waitForTimeout(6000);
+    // 저장이 거부되면 에디터(PostWriteForm)에 그대로 남는다. 전역 dialog 핸들러가 네이버
+    // 오류 alert를 자동 수락하므로 거부가 예외로 올라오지 않는다 — URL로 확인해야 한다.
+    // 발행 경로와 같은 계약: 검증에 실패하면 장부를 건드리지 않고 성공을 출력하지 않는다.
+    if (logNoFromUrl(page.url()) !== String(logNo)) {
+      throw new Error(`edit verification failed for ${logNo} — still on ${page.url()} (ledger left untouched)`);
+    }
     const url = `https://blog.naver.com/${BLOG_ID}/${logNo}`;
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
     recordLedger({ slug, logNo, url, category, title: post.title, date: today, editedAt: new Date().toISOString() });

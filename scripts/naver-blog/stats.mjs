@@ -85,29 +85,35 @@ async function viewsOnce(logNo) {
 }
 const viewsOf = (logNo) => withRetry(() => viewsOnce(logNo));
 
-async function likesOf(logNo) {
+// views와 같은 계약: null = 측정 실패, 숫자 = 실제 값. 둘을 0으로 합치면
+// "좋아요 0"과 "좋아요를 못 읽음"이 리포트에서 구분되지 않는다.
+// 응답은 왔는데 항목이 비어 있으면 그건 진짜 0이므로 재시도하지 않는다.
+async function likesOnce(logNo) {
   try {
     const r = await get(
       `https://apis.naver.com/blogserver/like/v1/search/contents?suppress_response_codes=true&q=BLOG%5B${BLOG_ID}_${logNo}%5D&pool=blogid`,
       { referer: `https://blog.naver.com/${BLOG_ID}/${logNo}` },
     );
-    const c = (await r.json())?.contents?.[0];
+    const body = await r.json();
+    const c = body?.contents?.[0];
     if (c?.reactions?.length) return c.reactions.reduce((s, x) => s + (x.count || 0), 0);
     if (typeof c?.likeItCount === 'number') return c.likeItCount;
-    return 0;
-  } catch { return 0; }
+    return Array.isArray(body?.contents) ? 0 : null; // 정상 응답인데 반응 없음 = 진짜 0
+  } catch { return null; }
 }
+const likesOf = (logNo) => withRetry(() => likesOnce(logNo));
 
 // The mobile post document carries the count as a plain attribute on #_post_property —
 // no widget render needed, and it matches what the cbox widget would have reported.
-async function commentsOf(logNo) {
+async function commentsOnce(logNo) {
   try {
     const html = await (await get(`https://m.blog.naver.com/${BLOG_ID}/${logNo}`, { ua: UA_MOBILE })).text();
     const m = html.match(/id="_post_property"[\s\S]{0,400}?commentCount="(\d+)"/)
       || html.match(/\\"commentCount\\":(\d+)/);
-    return m ? Number(m[1]) : 0;
-  } catch { return 0; }
+    return m ? Number(m[1]) : null; // 속성을 못 찾음 = 문서를 못 읽은 것(로그인 만료·리다이렉트)
+  } catch { return null; }
 }
+const commentsOf = (logNo) => withRetry(() => commentsOnce(logNo));
 
 async function mapPool(items, n, worker) {
   const out = new Array(items.length);
@@ -120,7 +126,7 @@ async function mapPool(items, n, worker) {
 
 const statRows = () => mapPool(posts, CONCURRENCY, async (p) => {
   const [views, likes, comments] = await Promise.all([viewsOf(p.logNo), likesOf(p.logNo), commentsOf(p.logNo)]);
-  console.error(`  ${p.logNo}  views ${views ?? '—'} · likes ${likes} · comments ${comments}  ${(p.title || p.slug).slice(0, 26)}`);
+  console.error(`  ${p.logNo}  views ${views ?? '—'} · likes ${likes ?? '—'} · comments ${comments ?? '—'}  ${(p.title || p.slug).slice(0, 26)}`);
   return { title: p.title || p.slug, date: p.date || '', category: p.category || '', views, likes, comments };
 });
 
@@ -150,8 +156,8 @@ console.log('| title | date | board | views | likes | comments |');
 console.log('| --- | --- | --- | --: | --: | --: |');
 let V = 0, L = 0, C = 0;
 for (const r of rows) {
-  L += r.likes; C += r.comments; V += (r.views || 0);
-  console.log(`| ${r.title.slice(0, 30)} | ${r.date} | ${r.category} | ${r.views ?? '—'} | ${r.likes} | ${r.comments} |`);
+  L += (r.likes || 0); C += (r.comments || 0); V += (r.views || 0);
+  console.log(`| ${r.title.slice(0, 30)} | ${r.date} | ${r.category} | ${r.views ?? '—'} | ${r.likes ?? '—'} | ${r.comments ?? '—'} |`);
 }
 console.log(`| **total (${rows.length})** | | | **${V}** | **${L}** | **${C}** |`);
 console.error(`(cookie: ${src})`);

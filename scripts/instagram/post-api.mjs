@@ -235,7 +235,10 @@ const entry = {
   id: pub.id,
   permalink: null,
   items: REELS ? 1 : urls.length,
-  date: new Intl.DateTimeFormat('en-CA').format(new Date()),
+  // 다른 채널과 동일: 날짜는 Asia/Seoul로 고정하고, publish-order.mjs가 실제로 정렬에
+  // 쓰는 publishedAt을 남긴다. 없으면 IG 행만 기계 로컬 시간대의 거친 날짜로 정렬된다.
+  date: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date()),
+  publishedAt: new Date().toISOString(),
 };
 let ledger;
 try {

@@ -6,7 +6,7 @@
 // Credentials: X_API_KEY/X_API_SECRET/X_ACCESS_TOKEN/X_ACCESS_SECRET (shared with post-api.mjs).
 // Usage: node stats.mjs [--limit N]  (default: latest 10, --limit 0 = all)
 
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { loadEnv, dataPath } from '../lib/env.mjs';
@@ -92,8 +92,12 @@ async function main() {
   const { limit } = parseArgs();
   if (!CK || !CS || !AT || !AS) throw new Error('Missing X_API_KEY/X_API_SECRET/X_ACCESS_TOKEN/X_ACCESS_SECRET (check your .env)');
 
+  // 손상된 장부는 빈 장부가 아니다 — 없는 파일만 빈 리포트로 처리하고 파싱 실패는 올린다
+  // (post-api.mjs의 loadLedger와 같은 계약. 아래 main().catch가 exit 1로 바꾼다).
+  if (!existsSync(LEDGER)) { console.log('No X posts yet (published-x.json is empty)'); return; }
   let ledger;
-  try { ledger = JSON.parse(readFileSync(LEDGER, 'utf8')); } catch { ledger = []; }
+  try { ledger = JSON.parse(readFileSync(LEDGER, 'utf8')); }
+  catch (error) { throw new Error(`cannot read X ledger: ${error.message}`); }
   ledger = ledger.filter((e) => e.rootId && !e.dup); // skip duplicates/unpublished rows
   if (!ledger.length) { console.log('No X posts yet (published-x.json is empty)'); return; }
   ledger.sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));

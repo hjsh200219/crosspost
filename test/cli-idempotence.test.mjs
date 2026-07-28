@@ -147,6 +147,53 @@ test('LinkedIn --at stores an absolute file path for the scheduler', () => {
   assert.equal(basename(entry.file), basename(post));
 });
 
+test('Brunch --skip-done does not treat a draft entry as published', () => {
+  writeFileSync(
+    join(ledgers, 'published-brunch.json'),
+    JSON.stringify([{ file: basename(post), articleNo: '1', status: 'draft' }]),
+  );
+  // 초안은 publish 실행을 만족시키지 않아야 한다 — 만족시키면 승격할 길이 사라진다.
+  // CDP에 닿기 전 다른 이유로 죽더라도, "이미 발행됨"으로 조기 종료하지 않는 것이 계약이다.
+  const result = run('scripts/brunch/post-api.mjs', ['--skip-done', post]);
+  assert.doesNotMatch(result.stdout, /skip \(already/);
+
+  // 같은 초안을 --status draft로 다시 돌리면 그때는 건너뛴다
+  const asDraft = run('scripts/brunch/post-api.mjs', ['--skip-done', '--status', 'draft', post]);
+  assert.equal(asDraft.status, 0, asDraft.stderr);
+  assert.match(asDraft.stdout, /skip \(already drafted\)/);
+});
+
+test('X stats fails closed on a corrupt ledger instead of reporting no posts', () => {
+  writeFileSync(join(ledgers, 'published-x.json'), '{not-json');
+  const result = run(
+    'scripts/x/stats.mjs',
+    [],
+    { X_API_KEY: 'k', X_API_SECRET: 's', X_ACCESS_TOKEN: 't', X_ACCESS_SECRET: 'ts' },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot read X ledger/);
+  assert.doesNotMatch(result.stdout, /No X posts yet/);
+});
+
+test('LinkedIn --at rejects an explicit --image instead of dropping it', () => {
+  const result = spawnSync(
+    process.execPath,
+    [join(repo, 'scripts/linkedin/post-api.mjs'), '--image', join(home, 'cover.jpg'), '--at', '2099-01-01 09:00', post],
+    {
+      cwd: home,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CROSSPOST_HOME: home,
+        LINKEDIN_ACCESS_TOKEN: 'test',
+        LINKEDIN_PERSON_URN: 'urn:li:person:test',
+      },
+    },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /--image is not supported with --at/);
+});
+
 test('Threads delete prunes the ledger only after the API confirms', () => {
   const ledger = join(ledgers, 'published-threads.json');
   writeFileSync(ledger, JSON.stringify([{ rootId: 'target', ids: ['target'] }, { rootId: 'keep', ids: ['keep'] }]));

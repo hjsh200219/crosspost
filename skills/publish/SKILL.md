@@ -316,7 +316,7 @@ delete + repost.
 | Facebook | ✓ | ✓ | `node post-api.mjs --delete <id>` / `--edit <id> <file>` |
 | Remember | ✓ | ✓ | `node post-api.mjs --delete <id>` / `--edit <id> <file>` |
 | Brunch | ✓ | ✓ | `node post-api.mjs --delete <id>` / `--edit <id> <file>` |
-| Naver Blog | ✓ | ✓ | `node post-api.mjs --delete <id>` / `--edit <id> <slug>` |
+| Naver Blog | ✓ | ✓ | `node post-api.mjs --delete <id>` / `--edit <id> <file>` |
 | Threads | ✓ | ✗ | `node post-api.mjs --delete <id>` (no edit API → delete + repost) |
 | X | ✓ | ✗ | `node post-api.mjs --delete <id>` (edit = delete + repost) |
 
@@ -344,9 +344,13 @@ points at a deleted post, stats will show it as a lookup failure — prune those
   when **Facebook is configured** and the post has an image: publish to Facebook first, then read
   that photo post's public CDN URL and hand it to Threads via `--image-url`:
   ```bash
-  curl "https://graph.facebook.com/v21.0/<fbPostId>?fields=full_picture&access_token=<FACEBOOK_PAGE_ACCESS_TOKEN>"
+  set -a; . "${CROSSPOST_HOME:-$HOME/.crosspost}/.env"; set +a
+  curl -sG "https://graph.facebook.com/v21.0/<fbPostId>" \
+    --data-urlencode fields=full_picture \
+    --data-urlencode "access_token=$FACEBOOK_PAGE_ACCESS_TOKEN"
   cd ${CLAUDE_PLUGIN_ROOT}/scripts/threads && node post-api.mjs --image-url "<full_picture-url>" "$CROSSPOST_HOME/posts/<slug>.txt"
   ```
+  Source the token — never paste it literally, or it lands in shell history, `ps`, and the transcript.
   If Facebook is not configured, Threads publishes **text-only** unless you pass an explicit `--image-url`.
 - **Remember is an unofficial API.** It is experimental and may break without notice. Treat any
   failure as non-fatal to the other channels.

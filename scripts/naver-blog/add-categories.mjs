@@ -85,6 +85,8 @@ try {
   await page.waitForTimeout(4000);
   console.log('saved (확인/confirm button clicked).');
 } catch (e) {
+  // exit(1)이 아니라 exitCode — finally의 releasePage/close가 돌아야 공유 CDP 탭이 안 샌다
+  process.exitCode = 1;
   console.error('error:', e.message);
   await page.screenshot({ path: dataPath('tmp/naver-cat-err.png') }).catch(() => {});
 } finally {
