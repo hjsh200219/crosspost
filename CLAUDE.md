@@ -48,8 +48,30 @@
 
 ## 배포 시 주의
 
-- `.claude-plugin/plugin.json`의 `version`을 반드시 bump할 것. bump 없이는 `plugin update`가 no-op이다
-- 캐시 갱신이 안 먹으면 uninstall + reinstall
+### git push는 더 이상 릴리스가 아니다 (2026-08-05)
+
+`marketplace.json`의 `source`가 `"./"`에서 **npm**(`crosspost-plugin`)으로 바뀌었다. 예전에는 push하면
+마켓플레이스가 git 트리를 그대로 읽어 그게 곧 배포였다. 지금은 **`npm publish`를 해야 사용자에게
+닿는다** — push만 하면 레포 HEAD와 사용자가 받는 코드가 조용히 갈라진다. 버전 핀을 걸지 않아
+사용자는 항상 `latest`를 받으므로, **미발행 커밋은 존재하지 않는 것과 같다.**
+
+릴리스 순서:
+
+1. `.claude-plugin/plugin.json`과 `package.json`의 `version`을 **함께** bump — 회귀 테스트가 둘의
+   일치를 강제한다(`the npm package and the plugin manifest declare the same version`)
+2. `npm run check`
+3. `npm pack` 후 **파일 목록을 눈으로 확인** — `files` 화이트리스트를 쓰면 npm이 `.gitignore`를
+   더 이상 참조하지 않는다. 실제로 `scripts/*/`에 쌓인 `.omc/` 상태(절대경로·세션 ID)가 tarball에
+   들어간 적이 있다. `.npmignore`가 막고 있지만 확인은 절차다
+4. commit + push
+5. **`npm publish`** ← 이걸 빼먹으면 1~4가 사용자에게 아무 의미가 없다
+
+버전을 bump하지 않으면 `plugin update`는 여전히 no-op이다. 캐시 갱신이 안 먹으면 uninstall + reinstall.
+
+npm 인증은 `~/.npmrc`의 granular 토큰을 그대로 쓴다(계정 `inter349`). **`npm login` 금지** — 웹 세션
+토큰이 granular 토큰을 덮어써 E403이 난다. 상세는 `SHC/novice/.claude-project/memory/npm-publish-flow.md`.
+
+### 그 외
 - 로컬 검증 기본값은 `npm run check`다. `node --test`, `scripts/**/*.mjs` 문법 검사,
   `skills/**/*.sh` 문법 검사를 묶는다
 - **syntax check와 grep만으로 검증했다고 하지 말 것.** 실제 설치한 fresh-home에서 한 번 돌려봐야 한다

@@ -33,24 +33,26 @@ templates, installs dependencies, and walks you through credentials for only the
 choose. The rest of this README is the reference behind that guided flow.
 
 <details>
-<summary>Installing from npm instead</summary>
+<summary>Where those two commands actually pull from</summary>
 
-The plugin is also published as [`crosspost-plugin`](https://www.npmjs.com/package/crosspost-plugin)
-on the public npm registry, which a marketplace can pull from directly:
+The marketplace resolves this plugin to [`crosspost-plugin`](https://www.npmjs.com/package/crosspost-plugin)
+on the public npm registry, so installing runs `npm install` under the hood and always takes the
+latest published release. Two things follow from that:
+
+- `playwright` is a hard dependency and is always pulled, even though only Brunch and the Facebook
+  reach scrape need a browser (see [Channels](#channels)). The browser binaries are still a
+  separate `npx playwright install`, which `/crosspost:setup` handles.
+- Installing from a clone of this repository is **not** the same as installing the plugin. Use the
+  two commands above; a clone is for development.
+
+To pin a release rather than track the latest, point your own marketplace entry at a fixed version:
 
 ```json
 {
   "name": "crosspost",
-  "source": { "source": "npm", "package": "crosspost-plugin" }
+  "source": { "source": "npm", "package": "crosspost-plugin", "version": "0.6.0" }
 }
 ```
-
-Add `"version": "0.6.0"` to that block to pin a release instead of tracking the latest.
-
-Both routes install the same plugin; they differ in install weight. `playwright` is a hard
-dependency, so the npm route always pulls it (the browser binaries are still a separate
-`npx playwright install`). Only Brunch and the Facebook reach scrape actually need a browser —
-see [Channels](#channels).
 
 </details>
 
@@ -332,23 +334,25 @@ syntax validation.
 사용자가 고른 채널만 자격증명 설정을 안내한다. 이 README의 나머지는 그 안내 흐름의 레퍼런스다.
 
 <details>
-<summary>npm으로 설치하기</summary>
+<summary>위 두 줄이 실제로 어디서 받아오는가</summary>
 
-이 플러그인은 공개 npm 레지스트리에 [`crosspost-plugin`](https://www.npmjs.com/package/crosspost-plugin)
-으로도 발행돼 있어 마켓플레이스가 직접 끌어올 수 있다:
+마켓플레이스는 이 플러그인을 공개 npm 레지스트리의
+[`crosspost-plugin`](https://www.npmjs.com/package/crosspost-plugin)으로 해석한다. 즉 설치는 내부적으로
+`npm install`이고 항상 최신 발행본을 받는다. 여기서 두 가지가 따라온다:
+
+- `playwright`가 하드 의존이라 항상 함께 끌려온다. 실제로 브라우저가 필요한 것은 브런치와 Facebook
+  조회수 스크레이프뿐인데도 그렇다([채널](#채널) 참조). 브라우저 바이너리는 여전히 별도
+  `npx playwright install`이며 `/crosspost:setup`이 처리한다.
+- **이 레포를 clone하는 것은 플러그인 설치가 아니다.** 위 두 줄을 쓸 것. clone은 개발용이다.
+
+최신 추종 대신 특정 릴리스에 고정하려면 자체 마켓플레이스 항목에 버전을 박는다:
 
 ```json
 {
   "name": "crosspost",
-  "source": { "source": "npm", "package": "crosspost-plugin" }
+  "source": { "source": "npm", "package": "crosspost-plugin", "version": "0.6.0" }
 }
 ```
-
-특정 릴리스에 고정하려면 위 블록에 `"version": "0.6.0"`을 추가한다.
-
-두 경로 모두 같은 플러그인을 설치하며, 차이는 설치 무게다. `playwright`가 하드 의존이라 npm 경로는
-항상 이것을 끌어온다(브라우저 바이너리는 여전히 별도 `npx playwright install`). 실제로 브라우저가
-필요한 것은 브런치와 Facebook 조회수 스크레이프뿐이다 — [채널](#채널) 참조.
 
 </details>
 

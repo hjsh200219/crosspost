@@ -1,6 +1,6 @@
 {
   "name": "crosspost-plugin",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "description": "Claude Code plugin: cross-post one canonical post to 8 channels (LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog, Instagram)",
   "license": "MIT",

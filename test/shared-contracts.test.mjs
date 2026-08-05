@@ -135,3 +135,18 @@ test('the npm package and the plugin manifest declare the same version', () => {
   // The manifest is what makes the tarball a plugin rather than a script bundle.
   assert.ok(pkg.files.includes('.claude-plugin/'), 'the published files must carry the plugin manifest');
 });
+
+test('the marketplace resolves this plugin to the package this repo publishes', () => {
+  // The marketplace entry points at npm, so installs no longer read this git tree.
+  // If the package name here drifts from package.json, every install breaks while
+  // the working copy keeps passing every other check — nothing local depends on it.
+  const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+  const read = (p) => JSON.parse(readFileSync(join(root, p), 'utf8'));
+  const pkg = read('package.json');
+  const entry = read('.claude-plugin/marketplace.json').plugins.find((p) => p.name === 'crosspost');
+  assert.ok(entry, 'the marketplace must still list the crosspost plugin');
+  assert.equal(entry.source.source, 'npm');
+  assert.equal(entry.source.package, pkg.name);
+  // Unpinned on purpose: users track latest, which is why publishing is part of releasing.
+  assert.equal(entry.source.version, undefined);
+});

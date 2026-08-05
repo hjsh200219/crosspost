@@ -7,7 +7,10 @@
   "plugins": [
     {
       "name": "crosspost",
-      "source": "./",
+      "source": {
+        "source": "npm",
+        "package": "crosspost-plugin"
+      },
       "description": "Write once, publish everywhere: cross-post a single canonical post to LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog, and Instagram — with per-channel body variants, unified stats, and edit/delete support."
     }
   ]
