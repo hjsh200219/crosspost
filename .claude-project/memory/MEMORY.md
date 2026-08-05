@@ -11,3 +11,4 @@
 - [upstream-sync-content-drift](upstream-sync-content-drift.md) — 원본 역동기화의 본체는 없는 파일이 아니라 공유 파일의 내용 드리프트. 동기화 기준 커밋을 남길 것
 - [ledger-local-publish-ordering](ledger-local-publish-ordering.md) — 통계 정렬 시 다른 채널 장부의 시각을 빌리지 않고 각 채널 장부의 `publishedAt`/`ts`를 사용
 - [naver-ui-dialog-autoaccept](naver-ui-dialog-autoaccept.md) — 네이버 UI 경로는 오류 alert를 자동 수락해 거부가 예외로 안 온다. 성공 판정은 URL로만
+- [npm-pack-ignores-gitignore](npm-pack-ignores-gitignore.md) — `files`를 넣으면 npm이 `.gitignore`를 안 본다. 발행 감사는 소스 트리가 아니라 `npm pack` tarball에서
