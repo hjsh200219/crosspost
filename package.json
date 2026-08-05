@@ -1,9 +1,37 @@
 {
   "name": "crosspost-plugin",
-  "private": true,
+  "version": "0.6.0",
   "type": "module",
   "description": "Claude Code plugin: cross-post one canonical post to 8 channels (LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog, Instagram)",
   "license": "MIT",
+  "homepage": "https://github.com/hjsh200219/crosspost",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hjsh200219/crosspost.git"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "cross-post",
+    "social-media",
+    "linkedin",
+    "threads",
+    "instagram",
+    "naver-blog",
+    "brunch"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    ".claude-plugin/",
+    "commands/",
+    "config/",
+    "scripts/",
+    "skills/",
+    "test/",
+    "test-support/"
+  ],
   "scripts": {
     "browser": "bash scripts/lib/launch-browser.sh",
     "test": "node --test",

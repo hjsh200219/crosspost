@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import { canonicalLink, slugFromFile } from '../scripts/lib/canonical-link.mjs';
 import { publishMs, slugOf, urnMs } from '../scripts/lib/publish-order.mjs';
@@ -118,4 +119,19 @@ test('a partial delay flag cannot invert the follow delay range', async () => {
   // Explicit flags still win when they are consistent.
   const b = parseFollowArgs(['node', 'follow.mjs', '--follow-back', '--max', '2', '--delay-min', '5', '--delay-max', '10'], { max: 3, delayMin: 90, delayMax: 300 });
   assert.deepEqual([b.max, b.delayMin, b.delayMax], [2, 5, 10]);
+});
+
+test('the npm package and the plugin manifest declare the same version', () => {
+  // Two manifests, one release. `plugin update` is a no-op without a bumped
+  // plugin.json version, and the npm source pins by package.json version — so a
+  // drift between them ships an update that silently does nothing for one path.
+  const root = join(fileURLToPath(new URL('.', import.meta.url)), '..');
+  const read = (p) => JSON.parse(readFileSync(join(root, p), 'utf8'));
+  const pkg = read('package.json');
+  const plugin = read('.claude-plugin/plugin.json');
+  assert.match(pkg.version, /^\d+\.\d+\.\d+/, 'package.json needs a publishable version');
+  assert.equal(pkg.version, plugin.version);
+  assert.notEqual(pkg.private, true, 'a private package cannot be published to npm');
+  // The manifest is what makes the tarball a plugin rather than a script bundle.
+  assert.ok(pkg.files.includes('.claude-plugin/'), 'the published files must carry the plugin manifest');
 });

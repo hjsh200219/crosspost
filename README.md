@@ -32,6 +32,28 @@ Then run **`/crosspost:setup`** — it creates your data home, copies the `.env`
 templates, installs dependencies, and walks you through credentials for only the channels you
 choose. The rest of this README is the reference behind that guided flow.
 
+<details>
+<summary>Installing from npm instead</summary>
+
+The plugin is also published as [`crosspost-plugin`](https://www.npmjs.com/package/crosspost-plugin)
+on the public npm registry, which a marketplace can pull from directly:
+
+```json
+{
+  "name": "crosspost",
+  "source": { "source": "npm", "package": "crosspost-plugin" }
+}
+```
+
+Add `"version": "0.6.0"` to that block to pin a release instead of tracking the latest.
+
+Both routes install the same plugin; they differ in install weight. `playwright` is a hard
+dependency, so the npm route always pulls it (the browser binaries are still a separate
+`npx playwright install`). Only Brunch and the Facebook reach scrape actually need a browser —
+see [Channels](#channels).
+
+</details>
+
 ## What it does
 
 - **One source in → many posts out.** Give it a **YouTube URL** (captions are extracted), a
@@ -308,6 +330,27 @@ syntax validation.
 
 이후 **`/crosspost:setup`** 실행 — 데이터홈 생성, `.env`·`voice.md` 템플릿 복사, 의존성 설치, 그리고
 사용자가 고른 채널만 자격증명 설정을 안내한다. 이 README의 나머지는 그 안내 흐름의 레퍼런스다.
+
+<details>
+<summary>npm으로 설치하기</summary>
+
+이 플러그인은 공개 npm 레지스트리에 [`crosspost-plugin`](https://www.npmjs.com/package/crosspost-plugin)
+으로도 발행돼 있어 마켓플레이스가 직접 끌어올 수 있다:
+
+```json
+{
+  "name": "crosspost",
+  "source": { "source": "npm", "package": "crosspost-plugin" }
+}
+```
+
+특정 릴리스에 고정하려면 위 블록에 `"version": "0.6.0"`을 추가한다.
+
+두 경로 모두 같은 플러그인을 설치하며, 차이는 설치 무게다. `playwright`가 하드 의존이라 npm 경로는
+항상 이것을 끌어온다(브라우저 바이너리는 여전히 별도 `npx playwright install`). 실제로 브라우저가
+필요한 것은 브런치와 Facebook 조회수 스크레이프뿐이다 — [채널](#채널) 참조.
+
+</details>
 
 ## 기능
 

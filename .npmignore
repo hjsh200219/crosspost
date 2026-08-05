@@ -1,0 +1,30 @@
+# `files` in package.json is the allowlist; this file is the subtractive pass that
+# runs *inside* those directories. Both are needed: an allowlisted directory ships
+# whole, and `.gitignore` is not consulted once `files` is present — so anything
+# untracked that happens to sit under scripts/ or skills/ would otherwise be packed.
+# That is not hypothetical: OMC HUD state (absolute paths, session ids) had
+# accumulated under scripts/facebook/ and scripts/instagram/ and made it into a
+# `npm pack` listing. Re-run `npm pack` and read the file list before every publish.
+
+# Agent/session state — carries local absolute paths and session ids
+.omc/
+.claude-project/
+.claude/
+
+# User state and secrets — never leaves the machine
+.env
+*.env
+!.env.example
+browser-profile/
+profile/
+posts/
+published*.json
+queue.json
+*-cache.json
+ledgers/
+
+# Build and editor noise
+node_modules/
+*.log
+.DS_Store
+_workspace/
