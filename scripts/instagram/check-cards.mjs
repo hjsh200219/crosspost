@@ -19,6 +19,7 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadEnv, dataPath, home } from '../lib/env.mjs';
 import { canonicalLink } from '../lib/canonical-link.mjs';
+import { playable } from '../lib/mp4.mjs';
 import { validate, validateCaption } from './card-rules.mjs';
 
 loadEnv();
@@ -56,8 +57,15 @@ function checkSlug(slug, reels) {
   if (existsSync(listFile)) {
     rendered = readFileSync(listFile, 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).length;
   } else if (reels) {
-    rendered = existsSync(join(mediaDir, 'reel.mp4')) ? 1 : 0;
-    if (!rendered) errors.push(`no reel.mp4 in ${short(mediaDir)} — run gen-cards --reels then gen-reel`);
+    // Playability, not existence — a half-written reel.mp4 from a killed ffmpeg run exists
+    // and would sail through this gate straight into an unpublishable container (see lib/mp4.mjs).
+    const reel = join(mediaDir, 'reel.mp4');
+    rendered = playable(reel) ? 1 : 0;
+    if (!rendered) {
+      errors.push(existsSync(reel)
+        ? `reel.mp4 in ${short(mediaDir)} is not playable (truncated render) — delete it and re-run gen-reel`
+        : `no reel.mp4 in ${short(mediaDir)} — run gen-cards --reels then gen-reel`);
+    }
   } else if (existsSync(mediaDir)) {
     rendered = readdirSync(mediaDir).filter((f) => /^card-\d+\.(jpg|jpeg|png)$/i.test(f)).length;
   }

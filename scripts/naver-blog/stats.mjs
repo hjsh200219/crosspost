@@ -1,12 +1,22 @@
 // Naver blog per-post stats (views · likes · comments) for ledger posts — browserless.
-//   node stats.mjs                 # all ledger posts (views = yesterday, last finalized day)
+//   node stats.mjs                 # all ledger posts (views = lifetime cumulative)
 //   node stats.mjs <logNo>         # one post
-//   node stats.mjs --date 2026-07-13   # views for a specific finalized date
+//   node stats.mjs --window            # views = trailing ~15-day window ending today
+//   node stats.mjs --window --date 2026-07-13   # ...ending at a specific finalized date
 //
 // Metrics: views from the owner stats API (blog.stat.naver.com/api/blog/article/cv, the same
 // source as 관리 > 통계 > 게시물 조회수), likes via the blogserver like API, comments from the
 // m.blog post document. Naver finalizes view stats DAILY with a lag — a post published today
 // shows views starting from the next day's finalized data.
+//
+// Views are LIFETIME (`dashboard.cvTotal`), not the daily window. The response carries both
+// and they answer different questions: `rows.cv` is a trailing ~15-day daily series, so **any
+// post older than that window reports 0 no matter how many views it really has** (measured: a
+// post at window-sum 0 had a lifetime 2; 97 posts summed to 28 by window vs 41 by lifetime).
+// Every other channel in the report is lifetime cumulative, so the window sum also made the
+// Naver column apples-to-oranges. `cvTotal` is invariant to `startDate` (measured across three
+// dates). The window is still reachable via `--window` for "how much lately" questions, and
+// `--date` only means anything in that mode.
 //
 // 2026-07-27: CDP in-page fetch → plain node fetch with the session cookie. The cross-origin
 // wall that forced in-page fetches only exists in a browser; server-side there is no CORS, so
@@ -20,6 +30,7 @@ import { chromium } from 'playwright';
 import { loadEnv, dataPath, cdpPort } from '../lib/env.mjs';
 import { publishMs } from '../lib/publish-order.mjs';
 import { resolveCookie } from '../lib/site-cookie.mjs';
+import { measuredTotal } from '../lib/totals.mjs';
 
 loadEnv();
 
@@ -36,11 +47,18 @@ const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY || 6));
 
 const argv = process.argv.slice(2);
 const dateIdx = argv.indexOf('--date');
-// The cv API returns a trailing ~15-day daily window ending at startDate; summing it
-// gives each post's views over that window. Default endDate = today (KST); same-day is
-// delayed by Naver, so a post published today may still read 0 until the next day.
+// Default = lifetime (`dashboard.cvTotal`). `--window` reads the trailing ~15-day daily series
+// instead and sums it, which answers "how much lately" rather than "how much ever". `startDate`
+// is sent either way (it anchors the window the API returns), but in lifetime mode the value
+// does not change the answer. Same-day views are delayed by Naver, so a post published today
+// may still read 0 until the next day in either mode.
+const WINDOW = argv.includes('--window');
 const todayKST = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul' }).format(new Date());
 const viewDate = dateIdx !== -1 ? argv[dateIdx + 1] : todayKST();
+if (dateIdx !== -1 && !WINDOW) {
+  // Ignoring it silently would print a "views as of <date>" subtitle that had no effect.
+  console.error('  --date only means something with --window (default views are lifetime, so date-independent). Ignoring it.');
+}
 const only = argv.find((a) => /^\d{9,}$/.test(a));
 const limIdx = argv.indexOf('--limit');
 const LIMIT = limIdx !== -1 ? Number(argv[limIdx + 1]) : 20; // recent 20 by default (matches other channels); --limit 0 = all
@@ -78,9 +96,16 @@ async function viewsOnce(logNo) {
       `https://blog.stat.naver.com/api/blog/article/cv?timeDimension=DATE&startDate=${viewDate}&contentId=${logNo}`,
       { referer: `https://blog.stat.naver.com/blog/article/${logNo}/cv` },
     );
-    const j = await r.json();
-    const cv = j?.result?.statDataList?.[0]?.data?.rows?.cv;
-    return Array.isArray(cv) ? cv.reduce((s, x) => s + (Number(x) || 0), 0) : null;
+    const list = (await r.json())?.result?.statDataList;
+    if (!Array.isArray(list)) return null;
+    if (WINDOW) {
+      // Index the block by dataId rather than position — [0] happened to be `cv`, but the
+      // response also carries articleInfo/summary/dashboard and order is not contractual.
+      const cv = list.find((b) => b.dataId === 'cv')?.data?.rows?.cv;
+      return Array.isArray(cv) ? cv.reduce((s, x) => s + (Number(x) || 0), 0) : null;
+    }
+    const total = list.find((b) => b.dataId === 'dashboard')?.data?.value?.cvTotal;
+    return typeof total === 'number' ? total : null; // a missing block is unmeasured, not zero
   } catch { return null; }
 }
 const viewsOf = (logNo) => withRetry(() => viewsOnce(logNo));
@@ -151,13 +176,16 @@ if (rows.length && rows.every((r) => r.views == null) && src === 'env') {
 }
 
 // markdown table (date desc)
-console.log(`\nview-count basis date: ${viewDate} (Naver stats finalize daily; same-day figures reflect the next day)\n`);
+console.log(
+  WINDOW
+    ? `\nviews = trailing ~15-day window ending ${viewDate} — anything older than the window reads 0 (drop --window for lifetime totals)\n`
+    : '\nviews = lifetime cumulative, the same basis as the other channels (Naver finalizes daily, so a post published today still reads 0 until tomorrow)\n',
+);
 console.log('| title | date | board | views | likes | comments |');
 console.log('| --- | --- | --- | --: | --: | --: |');
-let V = 0, L = 0, C = 0;
 for (const r of rows) {
-  L += (r.likes || 0); C += (r.comments || 0); V += (r.views || 0);
   console.log(`| ${r.title.slice(0, 30)} | ${r.date} | ${r.category} | ${r.views ?? '—'} | ${r.likes ?? '—'} | ${r.comments ?? '—'} |`);
 }
-console.log(`| **total (${rows.length})** | | | **${V}** | **${L}** | **${C}** |`);
+const total = (key) => measuredTotal(rows, key);
+console.log(`| **total (${rows.length})** | | | **${total('views')}** | **${total('likes')}** | **${total('comments')}** |`);
 console.error(`(cookie: ${src})`);

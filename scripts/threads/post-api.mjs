@@ -7,6 +7,7 @@
 //   node post-api.mjs ../linkedin/posts/2026-06-30_x.txt   # publish one file as a chain
 //   node post-api.mjs --image-url <https-url> file.txt      # attach an image to the root post (Threads needs a public URL)
 //   node post-api.mjs --skip-done file.txt                  # skip files already recorded in the ledger
+//   node post-api.mjs --allow-hook-drift file.txt           # publish even if .threads.txt's first line differs from the canonical one
 //   node post-api.mjs a.txt b.txt                          # several (sequential, isolated)
 //   node post-api.mjs --delete <thread-id>                 # delete a single post
 //   node post-api.mjs --backfill-links                     # retro-attach link trailer to entries posted before their canonical article existed
@@ -188,11 +189,43 @@ function threadsVariantPath(file) {
   return f.replace(/\.txt$/, '.threads.txt');
 }
 
+// Hook drift gate. The skill's rule "keep the first line identical across the canonical file
+// and every channel variant" applies to `.threads.txt` too — only the paragraphs below it
+// diverge. The rule existed for weeks with no code enforcing it, and 9 of 28 posts shipped
+// breaking it: every one of them opened with a quote or a scene instead of the conclusion, and
+// they averaged the lowest reach of any stretch (66 views vs 133 where the rule held).
+//
+// It stops rather than warns because a warning is what the absence of this check already
+// amounted to — nobody catches it at publish time. Only Threads stops; the other channels
+// still go out, so the cost of a false stop is one re-run.
+const HOOK_PREFIX = 25;      // compare the opening only — polishing the tail is not drift
+let ALLOW_HOOK_DRIFT = false;
+
+const firstLine = (p) => readFileSync(p, 'utf8').split('\n')[0].trim();
+
+function assertHookMatches(canonicalFile, variantFile) {
+  const a = firstLine(canonicalFile);
+  const b = firstLine(variantFile);
+  if (a.slice(0, HOOK_PREFIX) === b.slice(0, HOOK_PREFIX)) return;
+  const msg = [
+    `${path.basename(variantFile)}: first line differs from the canonical file (hook drift)`,
+    `  canonical: ${a}`,
+    `  threads  : ${b}`,
+  ].join('\n');
+  if (ALLOW_HOOK_DRIFT) { console.warn(`${msg}\n  --allow-hook-drift given → publishing anyway`); return; }
+  console.error(msg);
+  console.error('  Match the variant\'s first line to the canonical one, or pass --allow-hook-drift if the difference is intentional.');
+  throw new Error('hook drift');
+}
+
 // ids is mutated in place so the caller can report already-published posts on mid-chain failure.
 async function publishFile(file, ids, imageUrl) {
   const variant = threadsVariantPath(file);
   const bodySrc = variant && existsSync(variant) ? variant : file;
-  if (bodySrc !== file) console.log(`  ↳ using Threads variant body: ${path.basename(bodySrc)}`);
+  if (bodySrc !== file) {
+    assertHookMatches(file, bodySrc);   // stop here on first-line drift (see comment above)
+    console.log(`  ↳ using Threads variant body: ${path.basename(bodySrc)}`);
+  }
   const text = readFileSync(bodySrc, 'utf8').trim();
   if (!text) throw new Error('empty file');
   const chunks = chunkText(text);
@@ -225,6 +258,11 @@ let IMAGE_URL = null;
 {
   const i = argv.indexOf('--image-url');
   if (i >= 0) { IMAGE_URL = argv[i + 1]; argv = [...argv.slice(0, i), ...argv.slice(i + 2)]; }
+}
+// --allow-hook-drift : publish even when `.threads.txt`'s first line differs from the canonical one
+{
+  const i = argv.indexOf('--allow-hook-drift');
+  if (i >= 0) { ALLOW_HOOK_DRIFT = true; argv = [...argv.slice(0, i), ...argv.slice(i + 1)]; }
 }
 if (!TOKEN || !USER_ID) {
   console.error('THREADS_ACCESS_TOKEN / THREADS_USER_ID missing in $CROSSPOST_HOME/.env');

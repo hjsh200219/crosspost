@@ -42,7 +42,8 @@ choose. The rest of this README is the reference behind that guided flow.
 - **Auto-detected channels.** A channel runs only when its credentials are set. Unconfigured
   channels are skipped silently — you don't need all eight.
 - **Per-channel variants.** Optional `<slug>.x.txt` / `<slug>.threads.txt` sibling files override
-  the body for those channels; everything else uses the canonical file.
+  the body for those channels; everything else uses the canonical file. A variant has to keep the
+  canonical first line — Threads refuses to publish one that drifts (`--allow-hook-drift` overrides).
 - **Unified stats.** `/publish --stat` reads every channel's ledger and renders one merged table,
   newest first.
 - **Edit / delete.** Delete on all channels; edit-in-place on five (Threads and X do delete+repost).
@@ -110,6 +111,11 @@ pick, rather than guessing one. Add a trailing instruction to steer any of them 
 /publish --stat         # same; explicit
 ```
 
+Totals report their own coverage — a column with an unread cell prints `128 (7/10 measured)`
+rather than folding the failure into a zero. Two per-channel flags are worth knowing:
+`naver-blog/stats.mjs --window` swaps lifetime views for the trailing ~15-day window, and
+`brunch/stats.mjs --prune` drops ledger rows whose articles were deleted on Brunch.
+
 **Per-channel body variants** — drop a sibling file next to the canonical post in
 `~/.crosspost/posts/`; the scripts swap it in automatically:
 
@@ -140,6 +146,34 @@ Naver session capture need a live browser:
 
 ```
 cd <plugin root> && npm run browser      # log into Kakao (Brunch) / Naver in the window
+```
+
+**Follow / follower list** (optional, opt-in per channel via the "Follow tools" block in
+`config/.env.example`):
+
+```
+/publish list            # read-only: followers, following, follow-back candidates per channel
+/publish follow          # preview candidates, then follow back / follow likers on approval
+```
+
+Each channel has `scripts/<channel>/follow.mjs` with `--follow-back` and `--follow-likers`;
+`--dry-run` previews without writing anything, `--max N` caps a run, and the follow ledger lives
+in `~/.crosspost/ledgers/follows-<channel>.json`.
+
+> **Automated following is against most platforms' terms of service**, and LinkedIn and the Meta
+> channels restrict accounts that do it. These tools default to a small cap, a long randomized
+> delay, and a warning on any non-dry run — and `/publish follow` previews first and asks before
+> touching the high-risk channels. Use them deliberately or not at all.
+> Run the two modes of one channel sequentially, never in parallel: they share a ledger and a
+> session, and Instagram rate-limits an account hit from both at once — reading alone is enough.
+> Brunch's liker lookup additionally needs `python3` with `curl_cffi` (`pip3 install curl_cffi`).
+
+Accepting Facebook friend requests is a separate tool, because a friend request is a mutual
+connection rather than a one-way follow — it is never part of a follow run:
+
+```
+cd <plugin root>/scripts/facebook && node accept-requests.mjs --dry-run   # preview
+cd <plugin root>/scripts/facebook && node accept-requests.mjs --max 3     # accept
 ```
 
 ## Data layout
@@ -284,7 +318,8 @@ syntax validation.
   사용자가 고르게 한다.
 - **채널 자동감지.** 자격증명이 설정된 채널만 실행. 미설정 채널은 조용히 건너뛴다 — 8개 다 필요 없다.
 - **채널별 변형.** 선택적 `<slug>.x.txt`·`<slug>.threads.txt` 형제 파일로 그 채널 본문만 교체.
-  나머지는 정본 파일 사용.
+  나머지는 정본 파일 사용. 변형도 **첫 줄은 정본과 같아야** 한다 — 어긋나면 Threads가 발행을
+  중단한다(`--allow-hook-drift`로 우회).
 - **통합 통계.** `/publish --stat`이 전 채널 장부를 읽어 최신순 통합 표 하나로 렌더.
 - **수정 / 삭제.** 전 채널 삭제 가능, 5개 채널은 in-place 수정(Threads·X는 삭제 후 재발행).
 
@@ -350,6 +385,11 @@ YouTube 영상이나 GitHub 레포는 하나를 임의로 고르지 않고 후�
 /publish --stat         # 동일; 명시적
 ```
 
+합계는 **측정된 값만** 더하고, 못 읽은 셀이 있는 열은 `128 (7/10 measured)`처럼 커버리지를 함께
+찍는다(측정 실패를 0으로 접지 않는다). 알아 둘 채널 플래그 둘 — `naver-blog/stats.mjs --window`는
+수명 누적 대신 최근 15일 창 조회수를, `brunch/stats.mjs --prune`은 브런치에서 삭제된 글의 장부
+항목을 정리한다.
+
 **채널별 본문 변형** — `~/.crosspost/posts/`의 정본 포스트 옆에 형제 파일을 두면 스크립트가 자동으로
 교체한다:
 
@@ -374,6 +414,32 @@ node post-api.mjs --edit <id> <file>     # LinkedIn, Facebook, 리멤버, 브런
 
 ```
 cd <플러그인 루트> && npm run browser     # 창에서 카카오(브런치)/네이버 로그인
+```
+
+**팔로우 / 팔로워 조회** (선택 — `config/.env.example`의 "Follow tools" 블록으로 채널별 opt-in):
+
+```
+/publish list            # 읽기 전용: 채널별 팔로워·팔로잉·맞팔 후보
+/publish follow          # 후보 미리보기 후 승인한 채널만 맞팔·라이커 팔로우
+```
+
+채널마다 `scripts/<channel>/follow.mjs`가 `--follow-back`·`--follow-likers` 두 모드를 제공한다.
+`--dry-run`은 아무것도 쓰지 않고 후보만 보여주고, `--max N`이 한 실행의 상한이며, 팔로우 장부는
+`~/.crosspost/ledgers/follows-<channel>.json`이다.
+
+> **자동 팔로우는 대부분 플랫폼의 약관 위반**이고, LinkedIn과 Meta 채널은 이를 이유로 계정을
+> 제한한다. 그래서 기본값이 작은 상한 + 긴 랜덤 지연이고 비-dry 실행마다 경고가 뜨며,
+> `/publish follow`는 먼저 미리보기를 낸 뒤 고위험 채널은 사용자 승인을 받고서야 실행한다.
+> 한 채널의 두 모드는 **순차 실행**할 것 — 장부와 세션을 공유하고, Instagram은 두 모드가 동시에
+> 두드리면 조회만으로도 레이트 리밋을 건다. 브런치 라이커 조회는 `python3` + `curl_cffi`가 필요하다
+> (`pip3 install curl_cffi`).
+
+Facebook 친구 요청 수락은 별도 도구다 — 친구는 일방 팔로우가 아니라 상호 연결이라 팔로우 실행에
+섞이지 않는다:
+
+```
+cd <플러그인 루트>/scripts/facebook && node accept-requests.mjs --dry-run   # 미리보기
+cd <플러그인 루트>/scripts/facebook && node accept-requests.mjs --max 3     # 수락
 ```
 
 ## 데이터 레이아웃

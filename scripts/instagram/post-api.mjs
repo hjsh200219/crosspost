@@ -32,6 +32,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadEnv, dataPath, home } from '../lib/env.mjs';
 import { canonicalLink } from '../lib/canonical-link.mjs';
+import { playable } from '../lib/mp4.mjs';
 import { validateCaption } from './card-rules.mjs';
 
 loadEnv();
@@ -152,7 +153,9 @@ if (explicit) {
 } else {
   const dir = dataPath(`media/${slug}`);
   if (REELS) {
-    if (existsSync(join(dir, 'reel.mp4'))) media = [`${slug}/reel.mp4`];
+    // Playable, not merely present — a truncated render would be handed to Meta as a URL and
+    // fail at the container stage with nothing to point at (see lib/mp4.mjs).
+    if (playable(join(dir, 'reel.mp4'))) media = [`${slug}/reel.mp4`];
   } else if (existsSync(dir)) {
     media = readdirSync(dir).filter((f) => /^card-\d+\.(jpg|jpeg|png)$/i.test(f)).sort().map((f) => `${slug}/${f}`);
   }

@@ -20,6 +20,28 @@ export function apiHeaders(cookie) {
   return { Cookie: cookie, 'User-Agent': UA, Referer: 'https://brunch.co.kr/', 'Accept-Language': 'en-US,en;q=0.9' };
 }
 
+/**
+ * Carry the form-login (tier 3) outcome into the failure message.
+ *
+ * Anything other than `KAKAO_2FA` used to be swallowed by a bare `catch {}`, leaving only the
+ * generic "log in by hand" line. That made **"the form login never ran"** and **"the login
+ * worked but the session is still 401"** print the same sentence — and when the same form
+ * login then passed on its own a minute later, there was nothing left to tell the two apart
+ * after the fact. Print the reason to stderr immediately (scheduled runs keep only stderr)
+ * and attach it to the final error.
+ */
+function tier3Reason(e) {
+  const why = `${e?.code || 'ERR'}: ${String(e?.message || e).split('\n')[0].slice(0, 160)}`;
+  console.error(`  ! tier-3 Kakao form login failed — ${why}`);
+  return why;
+}
+
+function tier3Note(tier3) {
+  if (tier3 === 'ok') return 'form login succeeded but the session is still invalid — the Kakao account is alive, only the Brunch session will not attach';
+  if (tier3) return `form login failed — ${tier3}`;
+  return 'form login not attempted';
+}
+
 // Cookie strings contain ';', ' ' and embedded '"' (bid="..."), so we store them
 // base64-encoded in .env to sidestep all quoting. A raw cookie (manual override)
 // still works: base64 never contains ';' or ' ', a real cookie always does.
@@ -97,6 +119,7 @@ export async function captureCookieViaCDP(port = cdpPort()) {
     await page.waitForTimeout(1500);
     let cks = await ctx.cookies('https://api.brunch.co.kr');
     let cookie = cks.map((c) => `${c.name}=${c.value}`).join('; ');
+    let tier3 = null;  // null = not attempted · 'ok' = login succeeded · otherwise the reason
     if (!/\bbid=/.test(cookie)) {
       // Kakao SSO itself is dead (~monthly). Deepest tier: form login with KAKAO_ID/PW.
       // Works human-free while the profile keeps Kakao's device-trust cookies (2FA skipped);
@@ -104,20 +127,21 @@ export async function captureCookieViaCDP(port = cdpPort()) {
       try {
         const { loginViaKakao } = await import('./kakao-login.mjs');
         await loginViaKakao(port);
+        tier3 = 'ok';
         cks = await ctx.cookies('https://api.brunch.co.kr');
         cookie = cks.map((c) => `${c.name}=${c.value}`).join('; ');
       } catch (e) {
         if (e.code === 'KAKAO_2FA') {
           throw new Error('Kakao 2FA/device verification required — `npm run browser` and re-login to Kakao (approve on phone).');
         }
-        // NO_CREDS / NO_CDP / other → fall through to the human-login error below.
+        tier3 = tier3Reason(e);   // NO_CREDS / NO_CDP / NOT_AUTHED / other
       }
     }
     if (!cookie || !/\bbid=/.test(cookie)) {
-      throw new Error('no Brunch session cookie — Kakao login required (npm run browser → log into Kakao).');
+      throw new Error(`no Brunch session cookie (${tier3Note(tier3)}) — Kakao login required (npm run browser → log into Kakao).`);
     }
     if (!(await fetchMe(cookie))) {
-      throw new Error('Brunch session re-mint failed (Kakao SSO likely expired) — npm run browser → re-login to Kakao.');
+      throw new Error(`Brunch session re-mint failed (${tier3Note(tier3)}) — npm run browser → re-login to Kakao.`);
     }
     return cookie;
   } finally {
@@ -197,22 +221,24 @@ export async function openBrunch({ envPath, port = cdpPort() } = {}) {
     await page.bringToFront();
 
     let me = await remintAndProbe(page);
+    let tier3 = null;  // null = not attempted · 'ok' = login succeeded · otherwise the reason
     if (!me?.userId) {
       // Kakao SSO may need a fresh login. Tier3 form login (KAKAO_ID/PW + device trust),
       // then re-probe. A 2FA/device wall → human fallback.
       try {
         const { loginViaKakao } = await import('./kakao-login.mjs');
         await loginViaKakao(port);
+        tier3 = 'ok';
         me = await remintAndProbe(page);
       } catch (e) {
         if (e.code === 'KAKAO_2FA') {
           throw new Error('Kakao 2FA/device verification required — `npm run browser` and re-login to Kakao (approve on phone).');
         }
-        // NO_CREDS / NO_CDP / other → fall through to the human-login error below.
+        tier3 = tier3Reason(e);   // NO_CREDS / NO_CDP / NOT_AUTHED / other
       }
     }
     if (!me?.userId) {
-      throw new Error('Brunch session auth failed — npm run browser → re-login to Kakao.');
+      throw new Error(`Brunch session auth failed (${tier3Note(tier3)}) — npm run browser → re-login to Kakao.`);
     }
     return { me, src: 'cdp', get: (url) => pageGet(page, url), close: async () => { await browser.close(); } };
   } catch (e) {

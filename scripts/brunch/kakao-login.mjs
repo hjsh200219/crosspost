@@ -37,10 +37,11 @@ export async function loginViaKakao(port = cdpPort(), { verbose = false } = {}) 
     await page.goto(AUTH_URL, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(1200);
 
-    // NOTE: do NOT early-return on hasBid here — `bid` is set on anonymous sessions too,
+    // NOTE: do NOT early-return on bid presence here — `bid` is set on anonymous sessions too,
     // so a live-SSO probe by bid is a false positive that skips the form when the SSO is
     // actually dead. If the SSO is alive, /auth/kakao lands back on brunch.co.kr and the
     // accounts.kakao.com block below is simply skipped, then the loop returns LOGGED_IN.
+    // The same reason is why success below is gated on an authenticated /v2/me, not on bid.
 
     // Fill the Kakao login form if present.
     if (/accounts\.kakao\.com/.test(page.url())) {
@@ -67,9 +68,8 @@ export async function loginViaKakao(port = cdpPort(), { verbose = false } = {}) 
     }
 
     // Post-submit: walk through consent / device-registration screens; bail on 2FA.
-    // Past the early ALREADY return above, bid was absent — any success here is a fresh login.
     for (let i = 0; i < 6; i++) {
-      if (await hasBid(ctx)) return 'LOGGED_IN';
+      if (await isAuthed(page)) return 'LOGGED_IN';
       const u = page.url();
       const bodyTxt = (await page.evaluate(() => document.body?.innerText || '').catch(() => '')) || '';
 
@@ -87,13 +87,46 @@ export async function loginViaKakao(port = cdpPort(), { verbose = false } = {}) 
       await page.waitForTimeout(1500);
     }
 
-    if (await hasBid(ctx)) return 'LOGGED_IN';
-    throw Object.assign(new Error('login did not complete (no bid cookie issued)'), { code: 'NO_BID' });
+    if (await isAuthed(page)) return 'LOGGED_IN';
+    // bid presence is a diagnostic, not evidence of success — anonymous sessions carry one too.
+    const anon = (await hasBid(ctx)) ? 'anonymous session (bid only)' : 'no bid issued';
+    throw Object.assign(new Error(`login did not complete — ${anon}, /v2/me not authenticated`), { code: 'NOT_AUTHED' });
   } finally {
     await browser.close();
   }
 }
 
+/**
+ * Success = an authenticated in-page `/v2/me` 200.
+ *
+ * The old gate was `hasBid(ctx)`, but **`bid` is set on anonymous sessions too** — the comment
+ * at the top of this file already said so (it is why the old `/\bbid=/` gate was dropped from
+ * cookie.mjs), and yet the same gate was still standing here as the success condition.
+ *
+ * So when `openBrunch` fell through to a form login (its condition is `!me?.userId`, which
+ * says nothing about bid), iteration 0 of the loop saw a bid, returned `LOGGED_IN` **without
+ * ever filling the form**, and the caller recorded a successful login whose re-probe then
+ * failed — reporting "form login succeeded but the session is still invalid" for a login that
+ * was never attempted. Symptom to recognize: `--verbose` prints `LOGGED_IN` with no
+ * `kakao login form — filling` line above it.
+ *
+ * Only a fetch from inside a live brunch.co.kr document is authenticated (see cookie.mjs).
+ * While the page sits on a Kakao domain the call is cross-origin and returns 0, which is
+ * correctly "not authenticated" — the loop keeps going.
+ */
+async function isAuthed(page) {
+  const status = await page
+    .evaluate(async () => {
+      try {
+        const r = await fetch('https://api.brunch.co.kr/v2/me', { credentials: 'include' });
+        return r.status;
+      } catch { return 0; }
+    })
+    .catch(() => 0);
+  return status === 200;
+}
+
+// Diagnostic only — never use as a success gate (anonymous sessions carry a bid too).
 async function hasBid(ctx) {
   const cks = await ctx.cookies('https://api.brunch.co.kr');
   return cks.some((c) => c.name === 'bid');

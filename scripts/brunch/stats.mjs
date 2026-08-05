@@ -9,9 +9,11 @@
 //   node stats.mjs                # ledger entries (published-brunch.json), date desc
 //   node stats.mjs --limit 0      # all ledger entries (default: 20)
 //   node stats.mjs --limit 5
-import { readFileSync, existsSync } from 'fs';
+//   node stats.mjs --prune        # drop confirmed-deleted rows from the ledger (scans all of it)
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import path from 'path';
 import { loadEnv, home, dataPath, cdpPort } from '../lib/env.mjs';
+import { measuredTotal } from '../lib/totals.mjs';
 import { openBrunch } from './cookie.mjs';
 
 loadEnv();
@@ -22,15 +24,22 @@ const LEDGER = dataPath('ledgers/published-brunch.json');
 
 const argv = process.argv.slice(2);
 let limit = 20;
+let prune = false;
 for (let i = 0; i < argv.length; i++) {
   if (argv[i] === '--limit') { limit = parseInt(argv[++i], 10); }
+  else if (argv[i] === '--prune') { prune = true; }
 }
 
 if (!existsSync(LEDGER)) { console.error('no published-brunch.json ledger — nothing published yet.'); process.exit(0); }
-let ledger = JSON.parse(readFileSync(LEDGER, 'utf8'));
-ledger = ledger.filter((e) => e.articleNo && e.status === 'publish').sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
-if (limit > 0) ledger = ledger.slice(0, limit);
-if (!ledger.length) { console.log('no published posts'); process.exit(0); }
+const rawLedger = JSON.parse(readFileSync(LEDGER, 'utf8'));
+// NOTE: no `.slice(limit)` here. The ledger keeps rows for articles later deleted on Brunch
+// (duplicate publishes, mostly), and slicing before the liveness check let a dead row eat a
+// slot in the window — asking for 10 returned 9 and pushed a live post out of view entirely.
+// Liveness is resolved first; the slice happens after.
+const candidates = rawLedger
+  .filter((e) => e.articleNo && e.status === 'publish')
+  .sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+if (!candidates.length) { console.log('no published posts'); process.exit(0); }
 
 // --- auth: env browserless fast path → in-page CDP fetch (see cookie.mjs openBrunch) ---
 // Brunch's API authenticates only from a live brunch.co.kr document, so every call below
@@ -69,9 +78,9 @@ const ranking = await (async () => {
     }
     out.push(...list);
     if (list.length < PAGE) break;
-    // 장부에 필요한 항목을 모두 찾았으면 더 넘길 이유가 없다
+    // Stop paging once every ledger entry has been matched.
     const seen = new Set(out.map((x) => String(x.article_no)));
-    if (ledger.every((e) => seen.has(String(e.articleNo)))) break;
+    if (candidates.every((e) => seen.has(String(e.articleNo)))) break;
   }
   return out;
 })();
@@ -110,21 +119,38 @@ async function mapPool(items, n, fn) {
   return out;
 }
 
-const enriched = await mapPool(ledger, 6, async (entry) => {
+// Two-stage liveness, so the window neither over-fetches the whole ledger nor under-fills.
+// Presence in the ranking response is a free liveness signal; absence is NOT proof of death
+// (a post published today is live but not yet indexed — that is what the `*` marker means),
+// so only the unranked entries cost a page fetch. A lookup that merely failed is not a
+// deletion: it keeps its slot and reports unknown metrics.
+const selected = [];
+const dead = [];
+for (const entry of candidates) {
+  // `--prune` rewrites the ledger, so it must see every dead row — stopping at the window
+  // would delete a few and imply the rest are fine. Without it, stop as soon as the window
+  // is full (each unranked entry costs a page fetch).
+  if (!prune && limit > 0 && selected.length >= limit) break;
   const stat = byArticleNo.get(String(entry.articleNo));
+  if (stat) { selected.push({ entry, stat }); continue; }
   const art = await fetchArticle(entry.articleNo);
-  return { entry, stat, art };
-});
+  if (art.deleted) { dead.push(entry); continue; }
+  if (!art.live) console.error(`  ! ${entry.articleNo}: lookup failed (${art.error}) — metrics unknown`);
+  selected.push({ entry, stat: null, art });
+}
+
+// likes aren't in the ranking API — one page fetch per shown row (skip the ones already read)
+const shown = limit > 0 ? selected.slice(0, limit) : selected;
+const enriched = await mapPool(shown, 6, async (s) => ({ ...s, art: s.art ?? (await fetchArticle(s.entry.articleNo)) }));
 await client.close();
 
+const deletedCount = dead.length;
 const rows = [];
-let deletedCount = 0;
 for (const { entry, stat, art } of enriched) {
   const live = stat ? true : art.live; // in ranking ⇒ live; else trust the page check
   if (!live) {
-    if (art.deleted) { deletedCount++; continue; }
-    // 조회 실패는 삭제가 아니다 — 행은 남기되 지표는 미상으로 표시하고 합계에서 뺀다
-    console.error(`  ! ${entry.articleNo}: lookup failed (${art.error}) — metrics unknown`);
+    // A failed lookup is not a deletion — keep the row, mark the metrics unknown, and leave
+    // them out of the totals.
     rows.push({ title: entry.file, date: entry.date ?? null, view: null, likes: null, comment: null, share: null, unranked: true });
     continue;
   }
@@ -139,18 +165,31 @@ for (const { entry, stat, art } of enriched) {
   });
 }
 
-const totals = rows.reduce((a, r) => ({
-  view: a.view + (r.view || 0), likes: a.likes + (r.likes || 0), comment: a.comment + (r.comment || 0), share: a.share + (r.share || 0),
-}), { view: 0, likes: 0, comment: 0, share: 0 });
+const total = (key) => measuredTotal(rows, key);
 
 console.log('| title | date | views | likes | comments | shares |');
 console.log('|---|---|--:|--:|--:|--:|');
 for (const r of rows) {
   const title = r.title.length > 30 ? r.title.slice(0, 30) + '…' : r.title;
   const mark = r.unranked ? '*' : '';
-  console.log(`| ${title}${mark} | ${r.date ?? ''} | ${r.view ?? '—'} | ${r.likes ?? '?'} | ${r.comment ?? '—'} | ${r.share ?? '—'} |`);
+  console.log(`| ${title}${mark} | ${r.date ?? ''} | ${r.view ?? '—'} | ${r.likes ?? '—'} | ${r.comment ?? '—'} | ${r.share ?? '—'} |`);
 }
-console.log(`| **Total** | | **${totals.view}** | **${totals.likes}** | **${totals.comment}** | **${totals.share}** |`);
+console.log(`| **Total** | | **${total('view')}** | **${total('likes')}** | **${total('comment')}** | **${total('share')}** |`);
 if (deletedCount) console.log(`\n(${deletedCount} ledger entries confirmed deleted/not-live — excluded)`);
+if (prune) {
+  if (dead.length) {
+    const deadNos = new Set(dead.map((e) => String(e.articleNo)));
+    const kept = rawLedger.filter((e) => !(e.status === 'publish' && deadNos.has(String(e.articleNo))));
+    // Back up before overwriting. The ledger is the only record of what was published, and
+    // "confirmed deleted" rests on a 404 from a remote site — a wrong call has to be undoable.
+    writeFileSync(`${LEDGER}.bak`, `${JSON.stringify(rawLedger, null, 2)}\n`);
+    writeFileSync(LEDGER, `${JSON.stringify(kept, null, 2)}\n`);
+    console.log(`(--prune: removed ${dead.length} deleted entries from the ledger — ${kept.length} remain · backup: ${LEDGER}.bak)`);
+  } else {
+    console.log('(--prune: no confirmed-deleted entries to remove)');
+  }
+} else if (dead.length) {
+  console.log('(run with --prune to drop the deleted entries from the ledger)');
+}
 if (rankingFailed) console.log('(ranking API unavailable this run — views/comments/shares shown as — and excluded from totals)');
 else if (rows.some((r) => r.unranked)) console.log('(* = new post not yet reflected in the Brunch ranking API → views shown as 0. Likes are reflected immediately via SSR, but views are usually indexed within a day. The page is live.)');

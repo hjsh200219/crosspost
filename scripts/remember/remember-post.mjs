@@ -306,7 +306,9 @@ for (let i = 0; i < files.length; i++) {
   for (;;) {
     try {
       const id = await post(auth, content, att ? [att] : []);
-      appendFileSync(LEDGER, JSON.stringify({ file, topic: topicId, ts: new Date().toISOString() }) + '\n');
+      // Record the id. Without it the ledger cannot name the post it created — `--delete <id>`
+      // has nothing to read, and re-publishing the same file leaves two indistinguishable rows.
+      appendFileSync(LEDGER, JSON.stringify({ file, topic: topicId, ts: new Date().toISOString(), id: id ?? null }) + '\n');
       console.log(`${path.basename(file)}: published to Remember (id=${id ?? '?'}, topic_id=${topicId}, len=${content.length}${att ? ', +image' : ''})`);
       ok++; published++;
       break;

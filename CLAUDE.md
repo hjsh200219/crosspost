@@ -30,6 +30,18 @@
 
 `check-cards.mjs`가 발행 직전 게이트다 — IG는 발행 후 미디어 교체가 불가하고 캡션 수정도 사실상 안 되므로, 여기서 못 잡으면 영구다.
 
+## 팔로우 도구는 발행과 계약이 다르다 (2026-08-05 신설)
+
+`scripts/<채널>/follow.mjs` 8종 + `lib/follow-core.mjs`. 발행이 "정본 하나를 여러 채널에 뿌리는 것"이라면 이쪽은 **채널마다 계정 상태를 읽고 쓰는 것**이라 실패 모드가 다르다.
+
+- **안전장치를 문서가 아니라 코드에 둔다.** 원본(shconsulting)은 위험 게이트가 SKILL 오케스트레이션 산문에만 있었다. 배포본은 `parseFollowArgs(argv, defaults)`가 채널별 보수적 기본값(LinkedIn `--max 5`·60~180초, Meta 3종 `--max 3`·90~300초)을 강제하고 비-dry 실행마다 `warnRealRun()`이 경고를 찍는다. 남이 쓰는 도구는 프롬프트를 안 읽는다고 가정할 것.
+- **장부 상태는 넷이다** — `followed`(성립) · `failed`(재시도 가능) · `unconfirmed`(썼는데 확인 못 함, 사람이 확인·자동 재시도 없음) · `blocked`(플랫폼 확정 거부, 후보에서 영구 제외). **`followed`만 팔로우다** — 나머지를 집계에 넣으면 건수가 부풀려진다. 손상된 장부는 fail-closed(빈 걸로 읽으면 이미 팔로우한 사람에게 재발사).
+- **DOM 라벨은 번역 금지.** 브런치 팔로우/팔로잉, FB 팔로우/팔로우 취소·확인, IG 팔로우, Threads 액션행 라벨은 실제 UI 문자열이라 번역하면 클릭이 깨진다. 전부 env override로 뺐다(`*_LABEL`, `FACEBOOK_FRIEND_REQUESTS_HEADING`).
+- **한 채널의 두 모드는 순차.** 장부 파일과 세션을 공유하고, IG는 두 모드가 동시에 두드리면 **조회만으로도** 레이트 리밋을 건다. 채널이 다르면 병렬 OK.
+- **브런치 라이커만 Python 사이드카**(`likeit_users.py`). 그 엔드포인트는 curl_cffi 기본 전송만 200이고 **스텔스 impersonation을 켜면 오히려 401**이다. 이 저장소의 유일한 Node 밖 프로세스이자 유일한 선택적 외부 의존(`pip3 install curl_cffi`) — 미설치는 fail-fast하고 follow-back에는 영향 없다.
+- **친구 요청 수락(`facebook/accept-requests.mjs`)은 follow-core에 안 섞는다.** 친구는 상호 동의 관계라 일방 팔로우와 다르고, follow-core의 "모드 정확히 하나" 계약에도 안 맞는다. 자체 최소 러너를 유지한다.
+- **dry-run은 읽기 전용이지만 실계정을 읽는다.** CDP 세션이 살아 있으면 `--dry-run`도 실제 팔로워·요청 목록을 조회한다(LinkedIn은 세션 쿠키를 `.env`에 캡처·영속까지 한다). 검증용 격리 홈을 쓰더라도 그 홈에 실세션 쿠키가 남으므로 끝나면 지울 것.
+
 ## 사용자 상태는 전부 `~/.crosspost`
 
 `CROSSPOST_HOME` — `.env`(자격증명)·`voice.md`·`posts/`·`ledgers/`·`browser-profile/`. 플러그인 설치본은 업데이트 시 교체되는 캐시 복사본이므로 상태를 그 안에 두면 안 된다.

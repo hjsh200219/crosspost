@@ -46,6 +46,8 @@ guide is missing.
 | Input | Branch |
 |-------|--------|
 | **no arguments**, or `--stat` / "stats" / "성과" | **D. Stats** — report engagement across channels; do not draft or publish |
+| `follow` / `f` / "맞팔" / "follow back" | **§10 Follow** — follow back and follow likers across channels; do not draft |
+| `list` / `l` / "팔로워 조회" | **§11 List** — read-only follower/following/candidate report |
 | `youtube.com/…` · `youtu.be/…` | **A. YouTube** — extract captions, then draft |
 | `github.com/<owner>/<repo>` | **B. GitHub** — tool/project intro post **with original-source credit** |
 | any other topic / draft text | **C. Topic** — draft directly |
@@ -120,7 +122,14 @@ it when the character budget is tight (the canonical link stands in). This appli
   one assertive line — not the setup, the source, or a quote.
 - **No meta-framing.** Do not open with "This video/repo covers…". Lead with the claim.
 - Keep the first line **identical** across the canonical file and every channel variant; only
-  the paragraphs below diverge.
+  the paragraphs below diverge. **Threads enforces this**: `post-api.mjs` refuses to publish
+  when `<slug>.threads.txt` opens differently from the canonical file (first 25 characters),
+  and `--allow-hook-drift` is the deliberate override. The rule is not stylistic — the posts
+  that broke it, all of which opened with a quote or a scene instead of the conclusion, reached
+  about half the audience of the ones that kept it.
+- **Name the thing in the title.** When the subject is a proper noun — a tool, product, plugin,
+  feature — put that name in the first line as it is written. A descriptive paraphrase drops the
+  one word people search for, and the first line flows on into every channel's title.
 - Defer tone, length, hashtag, and emoji specifics to `voice.md`. Break paragraphs with blank lines.
 
 ---
@@ -239,13 +248,21 @@ or contrast; a reel gets no second read.
   cookie'd request, so a post goes out in ~3s instead of a 60~90s editor drive. The browser is only
   used to capture `NAVER_COOKIE` the first time and to re-capture it when it expires — plus
   `--edit`/`--delete`, which still drive the editor.
-- **Browser channels** (brunch, naver-blog) need the shared CDP browser running:
+- **Brunch is the one channel that publishes through the browser**, and Naver still needs it for
+  cookie capture and for `--edit`/`--delete`. Both use the shared CDP browser:
   ```bash
   cd ${CLAUDE_PLUGIN_ROOT} && npm run browser
   ```
   This launches Chromium with a persistent profile on `CROSSPOST_CDP_PORT` (default 9224).
   The **first time**, a human must log in once (Kakao for Brunch, Naver for Naver Blog) in that
   window; the session persists in `browser-profile/`. Automated re-login is not possible for these.
+- **A browser channel cannot be turned into an API channel by swapping HTTP clients.** Brunch's
+  session authenticates only inside a live `brunch.co.kr` document — the same cookie sent from
+  outside the page gets a 401 — and the Meta surfaces that still need a browser (Facebook's
+  Business Suite table) depend on anti-abuse tokens (`fb_dtsg`, `lsd`, `__csr`) that are minted
+  and signed per page load. A stealthier client does not help: a stealth fetcher is itself a
+  browser, and it cannot mint those tokens either. Read requests are a different question and
+  most of them do run browserless — it is the in-page binding, not the client, that decides.
 - If a channel is unconfigured, skip it silently. If a configured channel fails, the others still
   count — retry only the failed one. If the user says "without Threads/Brunch/…", skip that channel.
 - **Canonical trailer link:** if `CANONICAL_BASE_URL` is set, channels append a link back to your
@@ -290,8 +307,19 @@ CLI prints oldest-first before rendering. Do not paste raw CLI lines — rebuild
 In a terminal use a real Markdown table (pipes); only for chat surfaces that don't render
 Markdown tables, fall back to monospace.
 
+A total is the sum of what was **measured**. When a column holds any `—`, the scripts print the
+coverage next to the total (`128 (7/10 measured)`) — never fold an unmeasured cell into 0, or a
+run where every read failed reports "0 views" and reads as "nobody looked at it".
+
 Platform quirks to note under the table:
-- **Naver views finalize daily**, so a post published today shows 0 until the next day.
+- **Naver views are lifetime totals** (`node stats.mjs --window` switches to the trailing ~15-day
+  window instead). The stats API returns both, and the window is the trap: any post older than
+  about two weeks reports 0 through it no matter how many views it really has, and every other
+  channel here reports lifetime figures. Views still **finalize daily**, so a post published today
+  shows 0 until the next day in either mode.
+- **Brunch keeps ledger rows for deleted articles.** `stats.mjs` resolves liveness before it cuts
+  the window, so a dead row can no longer eat a slot and push a live post out of view; `--prune`
+  drops the confirmed-dead entries from the ledger (it scans all of it, not just the window).
 - **Threads comment counts** can be inflated by chain-continuation chunks counted as replies —
   not real external comments.
 - **Instagram insights need `instagram_manage_insights`.** Without it views/reach/saved/shares
@@ -302,6 +330,11 @@ Platform quirks to note under the table:
   scrapes the Business Suite content table for view counts; engagement comes from `stats.mjs`.
   That table also lists a connected Instagram account's rows, which carry the same opening line —
   the scraper filters by each row's platform badge, so don't "simplify" it to caption matching.
+  **How many rows that table renders is a function of viewport height**, not of scrolling,
+  pagination, or the date range, so the scraper grows the viewport on a ladder (native → 4000 →
+  8000 → 16000px) and stops once every requested post is matched. It always clears the override —
+  the browser is shared. The row count and the date-range chip it actually read are printed with
+  the results, so partial coverage is visible instead of implied.
 
 ---
 
@@ -356,3 +389,108 @@ points at a deleted post, stats will show it as a lookup failure — prune those
   failure as non-fatal to the other channels.
 - **Brunch / Naver sessions expire occasionally.** When a browser channel reports a login/session
   error, re-login manually in the CDP browser window (`npm run browser`) and retry.
+
+---
+
+## 10. Follow / follow-back (`/publish follow`, `f`)
+
+Each channel ships `scripts/<channel>/follow.mjs` with two modes — **follow-back** (people who
+follow you and you don't follow) and **follow-likers** (people who reacted to your recent posts).
+Shared safety behavior (ledger dedup, per-run cap, delay between follows, dry-run) lives in
+`scripts/lib/follow-core.mjs`, and every attempt is recorded in
+`$CROSSPOST_HOME/ledgers/follows-<channel>.json`.
+
+**Automated following breaks most platforms' terms of service.** LinkedIn's User Agreement
+prohibits it outright and Meta enforces it hardest — accounts get restricted for this, and a
+restriction on a real professional identity costs far more than a handful of follows is worth.
+So this branch is **preview-first and gated**, and it is never run without the user asking for it.
+
+| Mode | Channels |
+|---|---|
+| `--follow-back` | x · remember · brunch · naver-blog · linkedin · threads · instagram · facebook (8) |
+| `--follow-likers` | x · remember · brunch · linkedin · threads · instagram · facebook (7 — Naver has no liker surface) |
+
+**Procedure:**
+
+1. **Check prerequisites.** The CDP channels (threads, instagram, facebook, and brunch/naver for
+   writes) need the shared browser: `cd ${CLAUDE_PLUGIN_ROOT} && npm run browser`. Channels whose
+   follow-specific variables are unset (see `config/.env.example`, "Follow tools") sit the run out
+   — say which ones were skipped rather than quietly dropping them.
+2. **Preview every configured channel with `--dry-run`** — it reads only, writes nothing to the
+   ledger, and follows no one:
+   ```bash
+   cd ${CLAUDE_PLUGIN_ROOT}/scripts/<channel> && node follow.mjs --follow-back --dry-run
+   cd ${CLAUDE_PLUGIN_ROOT}/scripts/<channel> && node follow.mjs --follow-likers --dry-run [--posts N]
+   ```
+   Different channels may run in parallel. **Two modes of the SAME channel must run sequentially**
+   — they share one ledger file and one session, and Instagram rate-limits an account that hits it
+   from both at once (reading alone is enough to trigger it). Merge the results into one table:
+   `Channel | follow-back candidates | liker candidates`, with failures shown as `—` and
+   structurally-impossible cells as `✗`, never as `0`.
+3. **Execute by risk tier**, only after the user has seen the preview:
+   - **Lower risk, run on request**: `x` · `remember` · `brunch` · `naver-blog`.
+     `node follow.mjs <mode> --max N`. Start small (`--max 2` on Naver, whose write is a
+     multi-step form) and split large batches.
+   - **High risk — ask first, per channel**: `linkedin` · `threads` · `instagram` · `facebook`.
+     Show the candidates and run only the channels the user explicitly approves. Their built-in
+     defaults are already conservative (`--max 3–5`, 60–300s between follows), and a non-dry run
+     prints a warning naming the risk. **The gate belongs to the channel, not the mode** —
+     approving a channel approves both of its modes.
+   - Within one channel run **follow-back first, then follow-likers**. Someone who both follows
+     you and liked a post appears in both lists; whichever runs first records them, and the second
+     mode's dedup drops them. Never run the two concurrently — the later ledger write would
+     overwrite the earlier one.
+   - **The cap applies per mode**, so `--max 5` can mean up to 10 follows from one channel in a run.
+4. **Report** one merged table of channel × mode with followed / failed / skipped counts. Ledger
+   statuses distinguish `followed`, `failed` (retryable), `unconfirmed` (the write went out but
+   could not be verified — a human checks it, no automatic retry) and `blocked` (a definitive
+   platform refusal, excluded from later runs). **Only `followed` is a follow** — never count
+   `blocked` or `unconfirmed` in a total.
+
+**Per-channel notes worth surfacing when they come up:**
+- **brunch** follow-likers needs `python3` with `curl_cffi` (`pip3 install curl_cffi`); the
+  endpoint answers only that TLS stack. follow-back needs nothing extra.
+- **threads** liker recovery is a subset by design — an aggregated notification names one person,
+  so the number is not a like count.
+- **facebook** needs professional mode on a personal profile for public followers to exist, and
+  a fresh switch legitimately yields zero candidates.
+- **naver-blog** has no liker surface at all (`✗`, not "no data").
+- **linkedin** answers 405 for a minority of targets; those are recorded `blocked` so later runs
+  stop re-firing a refused write.
+
+**Facebook friend requests are a separate tool**, never part of a follow run:
+
+```bash
+cd ${CLAUDE_PLUGIN_ROOT}/scripts/facebook && node accept-requests.mjs --dry-run
+cd ${CLAUDE_PLUGIN_ROOT}/scripts/facebook && node accept-requests.mjs --max 3
+```
+
+Accepting a request creates a **mutual** connection both sides consented to — a different
+relationship from the one-way follow above, so it is not a mode of `follow.mjs` and is never run
+implicitly by `/publish follow`. Run it only when the user asks for it, preview first, and note
+that the request list is virtualized: a header count higher than the recovered rows is normal and
+the tool says so rather than pretending it saw everything. Its ledger is
+`ledgers/accepted-facebook.json`.
+
+---
+
+## 11. Follower list (`/publish list`, `l`) — read only
+
+The same dry-run preview as §10 step 2, run on its own: report followers, following and
+follow-back candidates per channel, and **follow no one**.
+
+1. Same prerequisites as §10 step 1.
+2. Run `node follow.mjs --follow-back --dry-run` for every configured channel (parallel across
+   channels, sequential within one).
+3. Report one table — `Channel | followers | following | follow-back candidates` — parsing the
+   `followers=` / `following=` / `candidates=` lines each script prints. A channel that failed or
+   is not logged in shows `—`, never `0`.
+4. **If the request also mentions likes/likers**, add a liker column by running
+   `node follow.mjs --follow-likers --dry-run --posts N` on the 7 channels that support it
+   (again: not in parallel with the same channel's other mode). Mark Threads' number as partial
+   and Naver as `✗`.
+5. To actually follow anyone, point the user at §10 — this branch never writes.
+
+Note that a dry run paginates whole follower lists, so a large account takes tens of seconds.
+
+---
