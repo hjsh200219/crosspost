@@ -1,6 +1,6 @@
 {
   "name": "crosspost",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Write once, publish everywhere: cross-post a single canonical post to LinkedIn, Facebook, Threads, X, Remember, Brunch, Naver Blog, and Instagram — with per-channel body variants, generated Instagram cards, unified stats, and edit/delete support.",
   "author": {
     "name": "SH Consulting",
