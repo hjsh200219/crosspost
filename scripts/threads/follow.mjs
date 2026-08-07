@@ -422,10 +422,18 @@ async function main() {
           console.error(`  ↳ [skip] seed @${s.id}: ${e.message}`);
           continue;
         }
-        const kept = users
-          .filter((u) => !u.following && !u.outgoingRequest && !ledgerIds.has(u.pk) && !refused.has(u.pk))
-          // No count means the record did not carry one. On cold outreach an unknown account is
-          // dropped rather than assumed acceptable.
+        const eligible = users.filter((u) => !u.following && !u.outgoingRequest && !ledgerIds.has(u.pk) && !refused.has(u.pk));
+        // No count means the record did not carry one. On cold outreach an unknown account is
+        // dropped rather than assumed acceptable — but if NONE of them carried one, that is the
+        // payload shape having changed, not a seed full of countless accounts. Folding that into
+        // "0 candidates" would report a healthy-looking run forever (same guard as listLikers').
+        if (eligible.length && eligible.every((u) => u.followerCount == null)) {
+          throw new Error(
+            `seed @${s.id}: ${eligible.length} follower record(s) and not one follower_count — the modal payload shape has changed, ` +
+            'so the quality floor cannot be applied. Treating it as a read failure rather than reporting no candidates.',
+          );
+        }
+        const kept = eligible
           .filter((u) => u.followerCount != null && u.followerCount >= minFollowers && u.followerCount <= maxFollowers)
           .map((u) => ({ targetId: u.pk, handle: u.username, seed: s.id }));
         console.error(`  ↳ seed @${s.id}/followers: ${users.length} record(s) · ${kept.length} candidate(s)`);
