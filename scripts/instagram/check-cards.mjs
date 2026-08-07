@@ -2,8 +2,11 @@
 /**
  * Pre-publish gate for the Instagram channel.
  *
- *   node check-cards.mjs <slug> [--reels]
+ *   node check-cards.mjs <slug> [--carousel]
  *   node check-cards.mjs --all
+ *
+ * Reels are the default format, matching gen-cards.mjs and post-api.mjs; the spec's own
+ * "format" field wins over that default, and an explicit flag wins over both.
  *
  * Instagram cannot replace media after publishing, so this is the last mechanical defence:
  * everything it catches is something that would otherwise be permanent. Run it before
@@ -25,18 +28,17 @@ import { validate, validateCaption } from './card-rules.mjs';
 loadEnv();
 
 const args = process.argv.slice(2);
-const REELS = args.includes('--reels');
+const FORMAT_FLAG = args.includes('--carousel') ? 'carousel' : args.includes('--reels') ? 'reels' : null;
 const ALL = args.includes('--all');
 const one = args.find((a) => !a.startsWith('--'));
-if (!one && !ALL) { console.error('usage: node check-cards.mjs <slug> [--reels] | --all'); process.exit(1); }
+if (!one && !ALL) { console.error('usage: node check-cards.mjs <slug> [--carousel] | --all'); process.exit(1); }
 
 const POSTS = dataPath('posts');
 const short = (p) => p.replace(home(), '$CROSSPOST_HOME');
 
-function checkSlug(slug, reels) {
+function checkSlug(slug, formatFlag) {
   const errors = [];
   const warnings = [];
-  const format = reels ? 'reels' : 'carousel';
 
   // 1) spec
   const specPath = dataPath(`cards/${slug}.json`);
@@ -44,6 +46,10 @@ function checkSlug(slug, reels) {
   if (existsSync(specPath)) {
     try { spec = JSON.parse(readFileSync(specPath, 'utf8')); } catch (e) { errors.push(`card spec is not valid JSON: ${e.message}`); }
   }
+  // Same resolution as gen-cards.mjs — flag, then spec, then the reels default. Checking a
+  // carousel as if it were a reel would look for a reel.mp4 that was never meant to exist.
+  const format = formatFlag || spec?.format || 'reels';
+  const reels = format === 'reels';
   if (spec) {
     const r = validate(spec, { format });
     errors.push(...r.errors);
@@ -64,7 +70,7 @@ function checkSlug(slug, reels) {
     if (!rendered) {
       errors.push(existsSync(reel)
         ? `reel.mp4 in ${short(mediaDir)} is not playable (truncated render) — delete it and re-run gen-reel`
-        : `no reel.mp4 in ${short(mediaDir)} — run gen-cards --reels then gen-reel`);
+        : `no reel.mp4 in ${short(mediaDir)} — run gen-cards then gen-reel (or --carousel if this is a carousel)`);
     }
   } else if (existsSync(mediaDir)) {
     rendered = readdirSync(mediaDir).filter((f) => /^card-\d+\.(jpg|jpeg|png)$/i.test(f)).length;
@@ -101,7 +107,7 @@ const targets = ALL
 
 let failed = 0;
 for (const slug of targets) {
-  const r = checkSlug(slug, REELS);
+  const r = checkSlug(slug, FORMAT_FLAG);
   const status = r.errors.length ? 'FAIL' : r.warnings.length ? 'warn' : 'ok';
   console.log(`${status.padEnd(4)}  ${slug} (${r.format})`);
   for (const e of r.errors) console.log(`      ✗ ${e}`);

@@ -121,6 +121,89 @@ test('a partial delay flag cannot invert the follow delay range', async () => {
   assert.deepEqual([b.max, b.delayMin, b.delayMax], [2, 5, 10]);
 });
 
+test('a body/checklist cap is the card total, and reels have no card ceiling', () => {
+  // Every item is under the old per-line limit; together they are over the card budget. Measured
+  // per line this passes, which is how cards ended up able to carry unbounded bullet lists.
+  const spread = {
+    cards: [
+      { type: 'cover', headline: 'Cover' },
+      { type: 'checklist', heading: 'Steps', items: ['x'.repeat(55), 'y'.repeat(55), 'z'.repeat(55)] },
+      { type: 'body', heading: 'Why', text: 'short' },
+      { type: 'body', heading: 'How', text: 'short' },
+    ],
+  };
+  const { errors } = validate(spread, { format: 'reels' });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /exceeds 160 for the card/);
+  assert.match(errors[0], /heading \+ all items/, 'the message must name the fields sharing the budget');
+
+  // A single element well inside the budget is fine even though it is longer than the old cap.
+  const roomy = {
+    cards: [
+      { type: 'cover', headline: 'Cover' },
+      { type: 'body', heading: 'Why', text: 'w'.repeat(100) },
+      { type: 'body', heading: 'How', text: 'short' },
+      { type: 'body', heading: 'What', text: 'short' },
+    ],
+  };
+  assert.deepEqual(validate(roomy, { format: 'reels' }).errors, []);
+
+  // Card count: a reel is bounded below (a quality floor) and not above.
+  const many = {
+    cards: Array.from({ length: 14 }, (_, i) => (i === 0
+      ? { type: 'cover', headline: 'Cover' }
+      : { type: 'body', heading: 'h', text: 't' })),
+  };
+  assert.deepEqual(validate(many, { format: 'reels' }).errors, []);
+  assert.ok(validate(many, { format: 'carousel' }).errors.length, 'a carousel is still capped at the platform limit');
+  assert.ok(validate({ cards: many.cards.slice(0, 3) }, { format: 'reels' }).errors.some((e) => /4 or more/.test(e)));
+});
+
+test('explore is opt-in per channel and starts from a much smaller cap', async () => {
+  const { parseFollowArgs, EXPLORE_MAX_DEFAULT } = await import('../scripts/lib/follow-core.mjs');
+  const { seedsFor, seedSideFor, interleaveBySeed } = await import('../scripts/lib/follow-seeds.mjs');
+
+  // A channel that has not implemented explore must refuse the flag. Falling through would run
+  // the liker path instead, because every channel main() is an if/else on the mode.
+  const exits = [];
+  const realExit = process.exit;
+  const realErr = console.error;
+  process.exit = (code) => { exits.push(code); throw new Error('exit'); };
+  console.error = () => {};
+  try {
+    assert.throws(() => parseFollowArgs(['node', 'follow.mjs', '--follow-explore'], {}));
+    assert.deepEqual(exits, [1]);
+    // Two modes at once is still refused.
+    assert.throws(() => parseFollowArgs(['node', 'follow.mjs', '--follow-back', '--follow-explore'], { explore: true }));
+  } finally {
+    process.exit = realExit;
+    console.error = realErr;
+  }
+
+  const a = parseFollowArgs(['node', 'follow.mjs', '--follow-explore'], { max: 15, explore: true });
+  assert.equal(a.mode, 'explore');
+  assert.equal(a.max, EXPLORE_MAX_DEFAULT, 'cold outreach must not inherit the follow-back cap');
+  assert.equal(parseFollowArgs(['node', 'follow.mjs', '--follow-back'], { max: 15, explore: true }).max, 15);
+
+  // Seeds are user configuration, and their absence is an error rather than an empty result.
+  const homeDir = mkdtempSync(join(tmpdir(), 'crosspost-seeds-'));
+  const prevHome = process.env.CROSSPOST_HOME;
+  process.env.CROSSPOST_HOME = homeDir;
+  try {
+    assert.throws(() => seedsFor('x'), /no explore seeds configured/);
+    assert.deepEqual(seedsFor('x', ['handle']).map((s) => s.id), ['handle']);
+  } finally {
+    if (prevHome === undefined) delete process.env.CROSSPOST_HOME; else process.env.CROSSPOST_HOME = prevHome;
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+
+  assert.equal(seedSideFor('threads'), 'followers', 'Threads exposes no following list');
+  assert.equal(seedSideFor('x'), 'following');
+  // Round-robin, so a small --max cannot drain only the first seed.
+  const mixed = interleaveBySeed(new Map([['a', [1, 2, 3]], ['b', ['x']], ['c', ['p', 'q']]]));
+  assert.deepEqual(mixed.slice(0, 3), [1, 'x', 'p']);
+});
+
 test('the npm package and the plugin manifest declare the same version', () => {
   // Two manifests, one release. `plugin update` is a no-op without a bumped
   // plugin.json version, and the npm source pins by package.json version — so a

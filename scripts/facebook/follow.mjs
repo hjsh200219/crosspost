@@ -39,14 +39,21 @@
 //
 // Accepting friend requests is a different relationship and lives in accept-requests.mjs.
 //
-// usage: node follow.mjs (--follow-back|--follow-likers) [--dry-run] [--max N]
+// explore (cold discovery) renders an arbitrary profile or page's /followers (or /following) tab
+// and mines it. Facebook is the one channel with NO quality signal in the listing — no follower
+// count, no post count — so the only filter before a write is filterActionable(), which opens
+// each shortlisted profile and looks at its buttons.
+//
+// usage: node follow.mjs (--follow-back|--follow-likers|--follow-explore) [--dry-run] [--max N]
 //        [--delay-min S] [--delay-max S] [--posts N]
+//        explore only: [--seed <slug-or-id> …] [--seed-side followers|following]
 // Requires a logged-in Facebook session in the shared CDP browser.
 
 import { readFileSync, existsSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { loadEnv, dataPath, cdpPort } from '../lib/env.mjs';
 import { followedIds, parseFollowArgs, runFollows, warnRealRun } from '../lib/follow-core.mjs';
+import { seedsFor, seedSideFor, interleaveBySeed } from '../lib/follow-seeds.mjs';
 
 loadEnv();
 
@@ -62,6 +69,28 @@ const FOLLOWERS_URL = PROFILE ? `https://www.facebook.com/${PROFILE}/followers` 
 const LABEL_FOLLOW = process.env.FACEBOOK_FOLLOW_LABEL || '팔로우';
 const LABEL_UNFOLLOW = process.env.FACEBOOK_UNFOLLOW_LABEL || '팔로우 취소';
 const LABEL_MUTUAL = process.env.FACEBOOK_MUTUAL_FRIENDS_LABEL || '함께 아는';
+// Facebook alternates between these two on a followed profile depending on context, so the
+// confirmation matches EITHER. Pinning one of them makes real follows read as unconfirmed, and an
+// unconfirmed follow is not deduped — the next run fires the same write at somebody already
+// followed, which is exactly the pattern abuse detection looks for.
+const LABEL_FOLLOWING = process.env.FACEBOOK_FOLLOWING_LABEL || '팔로잉';
+// Friendship is a separate axis: a friend's profile can show a follow button too. Those are
+// excluded from explore — they are not accounts you have no connection to, and a friend profile
+// surfaces no following/unfollow label at all, so a follow there can never be confirmed.
+const LABEL_FRIEND = process.env.FACEBOOK_FRIEND_LABEL || '친구';
+
+// A profile opens by numeric id or by custom username, and in practice most accounts have a
+// username — a numeric-only implementation silently drops the majority of what it finds.
+const profileUrl = (id) => (/^\d+$/.test(String(id))
+  ? `https://www.facebook.com/profile.php?id=${id}`
+  : `https://www.facebook.com/${id}`);
+
+// Facebook's own routes come back from href scraping looking like people ("Log in", "Sign up").
+// They get filtered out by the follow-button check anyway, but they consume a slot in it and make
+// the preview table untrustworthy.
+const SYSTEM_SLUGS = new Set(['l.php', 'login.php', 'signup', 'sharer.php', 'story.php', 'privacy',
+  'policies', 'help', 'settings', 'bookmarks', 'friends', 'groups', 'watch', 'marketplace',
+  'events', 'pages', 'profile.php', 'search', 'notes', 'gaming', 'ads', 'business']);
 
 // Reading the followers tab. `page.evaluate` runs in the page, so the labels are passed in.
 async function listFollowers(ctx) {
@@ -95,7 +124,7 @@ async function listFollowers(ctx) {
 async function followUser(ctx, { pk, name }) {
   const page = await ctx.newPage();
   try {
-    await page.goto(`https://www.facebook.com/profile.php?id=${pk}`, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await page.goto(profileUrl(pk), { waitUntil: 'domcontentloaded', timeout: 25000 });
     await page.waitForTimeout(2000);
     const clicked = await page.evaluate((label) => {
       const el = [...document.querySelectorAll('div[role=button]')].find((b) => (b.textContent || '').trim() === label);
@@ -111,18 +140,25 @@ async function followUser(ctx, { pk, name }) {
   // Confirm in a brand new tab — the clicked document's own state is optimistic client render.
   const confirmPage = await ctx.newPage();
   let confirmed = false;
+  let seen = [];
   try {
-    await confirmPage.goto(`https://www.facebook.com/profile.php?id=${pk}`, { waitUntil: 'domcontentloaded', timeout: 25000 });
+    await confirmPage.goto(profileUrl(pk), { waitUntil: 'domcontentloaded', timeout: 25000 });
     await confirmPage.waitForTimeout(2000);
-    confirmed = await confirmPage.evaluate(
-      (label) => [...document.querySelectorAll('div[role=button]')].some((b) => (b.textContent || '').trim() === label),
-      LABEL_UNFOLLOW,
+    seen = await confirmPage.evaluate(
+      () => [...document.querySelectorAll('div[role=button]')].map((b) => (b.textContent || '').trim()).filter((t) => t && t.length < 20),
     );
+    confirmed = seen.includes(LABEL_UNFOLLOW) || seen.includes(LABEL_FOLLOWING);
   } finally {
     await confirmPage.close().catch(() => {});
   }
   if (!confirmed) {
-    const err = new Error(`${name}(${pk}): the re-opened profile does not show the followed state`);
+    // Report the labels that WERE there. "unconfirmed" on its own sends the next reader hunting
+    // selectors, while the usual cause is the relationship state (a friend's profile shows
+    // neither label). The authoritative check is your own /following list, not this page.
+    const err = new Error(
+      `${name}(${pk}): the re-opened profile does not show the followed state (buttons: ${seen.slice(0, 5).join(' / ') || 'none'}) — ` +
+      'verify against facebook.com/<you>/following before assuming it failed',
+    );
     err.unconfirmed = true;
     throw err;
   }
@@ -179,14 +215,16 @@ async function filterActionable(ctx, rawCandidates) {
   for (const c of rawCandidates) {
     const page = await ctx.newPage();
     try {
-      await page.goto(`https://www.facebook.com/profile.php?id=${c.pk}`, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await page.goto(profileUrl(c.pk), { waitUntil: 'domcontentloaded', timeout: 25000 });
       await page.waitForTimeout(1500);
-      const hasFollow = await page.evaluate(
-        (label) => [...document.querySelectorAll('div[role=button]')].some((b) => (b.textContent || '').trim() === label),
-        LABEL_FOLLOW,
+      const labels = await page.evaluate(
+        () => [...document.querySelectorAll('div[role=button]')].map((b) => (b.textContent || '').trim()).filter((t) => t && t.length < 20),
       );
-      if (hasFollow) out.push(c);
-      else console.error(`  ↳ skipped: ${c.name} (${c.pk}) — no follow button (a pending friend request or another relationship state)`);
+      const hasFollow = labels.includes(LABEL_FOLLOW);
+      const isFriend = labels.includes(LABEL_FRIEND);
+      if (hasFollow && !isFriend) out.push(c);
+      else if (isFriend) console.error(`  ↳ skipped: ${c.name} (${c.pk}) — already a friend (a follow there cannot be confirmed, and it is not a cold contact)`);
+      else console.error(`  ↳ skipped: ${c.name} (${c.pk}) — no follow button (a pending friend request or another relationship state); buttons seen: ${labels.slice(0, 5).join(' / ') || 'none'}`);
     } finally {
       await page.close().catch(() => {});
     }
@@ -194,18 +232,63 @@ async function filterActionable(ctx, rawCandidates) {
   return out;
 }
 
-const describe = (c) => `${c.handle} (${c.targetId})`;
+// --- explore: mine a seed account's followers (or following) tab ---
+// Rows are scraped from hrefs because there is no API for this: the Graph endpoints for a page's
+// followers are either permission-denied or nonexistent fields on the new page experience.
+// Both href shapes matter — `profile.php?id=<n>` and `/<username>` — and a numeric-only parse
+// drops most of what a real followers tab contains.
+async function listNeighbours(ctx, seed, side) {
+  const page = await ctx.newPage();
+  try {
+    await page.goto(`https://www.facebook.com/${seed}/${side}`, { waitUntil: 'networkidle', timeout: 25000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+    for (let i = 0; i < 3; i++) { // one screenful is ~10 rows; a few scrolls is enough for --max
+      await page.evaluate(() => window.scrollBy(0, document.body.scrollHeight));
+      await page.waitForTimeout(1200);
+    }
+    const rows = await page.evaluate((mutualLabel) => {
+      const byId = new Map();
+      for (const a of document.querySelectorAll('a[href]')) {
+        const href = a.getAttribute('href') || '';
+        if (/notif_id=|notif_t=/.test(href)) continue;
+        let id = null;
+        const num = href.match(/profile\.php\?id=(\d+)/);
+        if (num) id = num[1];
+        else {
+          const rel = href.match(/^(?:https:\/\/www\.facebook\.com)?\/([A-Za-z0-9.]{4,50})\/?(?:\?|$)/);
+          if (rel) id = rel[1];
+        }
+        if (!id) continue;
+        const name = (a.textContent || '').trim();
+        const e = byId.get(id) || { id, name: '', count: 0 };
+        e.count += 1;
+        if (name && name.length < 40 && !name.includes(mutualLabel)) e.name = name;
+        byId.set(id, e);
+      }
+      return [...byId.values()];
+    }, LABEL_MUTUAL);
+    return rows.filter((r) => r.name && !SYSTEM_SLUGS.has(r.id));
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+const describe = (c) => `${c.handle} (${c.targetId})${c.seed ? ` [seed ${c.seed}]` : ''}`;
 
 async function main() {
-  const parsed = parseFollowArgs(process.argv, { max: 3, delayMin: 90, delayMax: 300 });
-  const { mode, dryRun, max, delayMin, delayMax, posts } = parsed;
+  const parsed = parseFollowArgs(process.argv, { max: 3, delayMin: 90, delayMax: 300, explore: true });
+  const { mode, dryRun, max, delayMin, delayMax, posts, seeds, seedSide } = parsed;
 
   if (mode === 'follow-back' && !PROFILE) {
     console.error('FACEBOOK_PROFILE is not set — follow-back needs your personal profile slug or id (the Page cannot follow people).');
     process.exit(1);
   }
   if (!dryRun) {
-    warnRealRun(CHANNEL, 'Meta polices follow automation more aggressively than any other channel here.');
+    warnRealRun(
+      CHANNEL,
+      'Meta polices follow automation more aggressively than any other channel here.' +
+      (mode === 'explore' ? ' Explore targets have no prior connection to you — this is cold outreach.' : ''),
+    );
   }
 
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { noDefaults: true });
@@ -214,7 +297,31 @@ async function main() {
     const ledgerIds = followedIds(CHANNEL);
 
     let via, rawCandidates;
-    if (mode === 'follow-back') {
+    if (mode === 'explore') {
+      via = 'explore';
+      const side = seedSideFor(CHANNEL, seedSide) === 'following' ? 'following' : 'followers';
+      const seedList = seedsFor(CHANNEL, seeds);
+      const bySeed = new Map();
+      for (const s of seedList) {
+        let rows;
+        try { rows = await listNeighbours(ctx, s.id, side); } catch (e) {
+          console.error(`  ↳ [skip] seed ${s.id}: ${e.message}`);
+          continue;
+        }
+        const kept = rows.filter((r) => !ledgerIds.has(r.id)).map((r) => ({ pk: r.id, name: r.name, seed: s.id }));
+        console.error(`  ↳ seed ${s.id}/${side}: ${rows.length} row(s) · ${kept.length} candidate(s)`);
+        bySeed.set(s.id, kept);
+      }
+      if (!bySeed.size) throw new Error('every seed failed to load — nothing was explored (this is not "no candidates").');
+      // A seed's followers tab yields far more rows than any run will use, and filterActionable
+      // costs a page load each. Check a small multiple of the cap and say how many were left.
+      const all = interleaveBySeed(bySeed);
+      const budget = Math.max(max * 4, 8);
+      rawCandidates = all.slice(0, budget);
+      if (all.length > rawCandidates.length) {
+        console.error(`  ↳ checking ${rawCandidates.length} of ${all.length} candidate(s) for a follow button (budget = --max × 4)`);
+      }
+    } else if (mode === 'follow-back') {
       via = 'follow-back';
       const followers = await listFollowers(ctx);
       console.error(`  ↳ followers listed=${followers.length} (professional mode counts friends in the total but never lists them — zero here is normal)`);
@@ -225,7 +332,7 @@ async function main() {
       rawCandidates = likers.filter((u) => !ledgerIds.has(u.pk));
     }
     const actionable = await filterActionable(ctx, rawCandidates);
-    const candidates = actionable.map((f) => ({ targetId: f.pk, handle: f.name, srcPost: f.srcPost }));
+    const candidates = actionable.map((f) => ({ targetId: f.pk, handle: f.name, srcPost: f.srcPost, seed: f.seed }));
 
     if (dryRun) {
       await runFollows({ channel: CHANNEL, candidates, via, dryRun, max, delayMin, delayMax, follow: async () => {}, describe });

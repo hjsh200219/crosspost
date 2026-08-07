@@ -35,8 +35,16 @@
 //
 // **Without --dry-run this really follows people from your account** (and only then is the CDP
 // browser needed).
-// usage: node follow.mjs (--follow-back|--follow-likers) [--dry-run] [--max N]
+// explore (cold discovery) works here too, and browserlessly: the same public subscription lists
+// answer for ANY user id, so a seed account's writers/followers can be read without a session.
+// The catch is that `myWriter` is only filled for a cookie'd request — from here it reads false
+// even for accounts you do subscribe to, so candidacy comes from a set difference against your
+// own writers list instead.
+//
+// usage: node follow.mjs (--follow-back|--follow-likers|--follow-explore) [--dry-run] [--max N]
 //        [--delay-min S] [--delay-max S] [--posts N]
+//        explore only: [--seed <userId> …] [--seed-side following|followers]
+//                      [--min-followers N] [--max-followers N]
 // `--posts N` (likers mode) collects likers from the N most recent ledger articles (default 10).
 
 import os from 'node:os';
@@ -48,6 +56,7 @@ import { chromium } from 'playwright';
 import { openBrunch, envFileCookie, persistCookie } from './cookie.mjs';
 import { loadEnv, home, dataPath, cdpPort } from '../lib/env.mjs';
 import { followedIds, parseFollowArgs, runFollows, warnRealRun } from '../lib/follow-core.mjs';
+import { seedsFor, seedSideFor, interleaveBySeed } from '../lib/follow-seeds.mjs';
 
 loadEnv();
 
@@ -76,10 +85,12 @@ function classify(status, text, label) {
 }
 
 // --- reading (browserless): cursor-paginate the public subscription lists ---
-async function fetchAllBrowserless(myUserId, kind) {
+// The list endpoints are public for ANY user id, not just your own — which is what makes the
+// explore mode possible here without a browser.
+async function fetchAllBrowserless(myUserId, kind, maxPages = MAX_PAGES) {
   const out = [];
   let cursor = '999999999999'; // first page: a very large value → newest first
-  for (let i = 0; i < MAX_PAGES; i++) {
+  for (let i = 0; i < maxPages; i++) {
     const url = `${API}/v2/subscription/user/@@${myUserId}/${kind}?listSize=${PAGE_SIZE}&subscribeNo=${cursor}&direction=down`;
     let res;
     try { res = await fetch(url, { headers: READ_HEADERS }); }
@@ -220,17 +231,63 @@ async function likerCandidates(postCount) {
   return [...byId.values()];
 }
 
-const describe = (c) => `${c.handle} (${c.targetId})`;
+// --- explore: mine a seed account's neighbourhood ---
+// Three pages per seed. Paginating a seed with thousands of subscribers to the end would spend
+// minutes to produce candidates that `--max 3` discards anyway.
+const EXPLORE_SEED_PAGES = 3;
+
+async function exploreCandidates(seedList, side, myWriterSet, myUserId, { minFollowers, maxFollowers }) {
+  const kind = side === 'following' ? 'writers' : 'followers'; // Brunch's word for "following"
+  const bySeed = new Map();
+  for (const seed of seedList) {
+    let list;
+    try { list = await fetchAllBrowserless(seed.id, kind, EXPLORE_SEED_PAGES); } catch (e) {
+      console.error(`  ↳ [skip] seed @@${seed.id}: ${e.message}`);
+      if (e.fatal) throw e;
+      continue;
+    }
+    const kept = [];
+    for (const u of list) {
+      if (!u.userId || u.userId === myUserId) continue;
+      // **Do not trust `myWriter` here.** The field only gets filled for a cookie'd request, and
+      // these reads are browserless — it comes back false even for writers you do subscribe to.
+      // The authoritative answer is the set difference against your own writers list.
+      if (myWriterSet.has(u.userId)) continue;
+      const followers = u.followerCount ?? 0;
+      if (followers < minFollowers || followers > maxFollowers) continue;
+      // No articles means there is nothing to subscribe to. Empty accounts are most of what the
+      // `followers` side of a large seed returns.
+      if ((u.articleCount ?? 0) < 1) continue;
+      kept.push({ targetId: u.userId, handle: u.userName || u.userId, seed: seed.id });
+    }
+    console.error(`  ↳ seed @@${seed.id}/${kind}: ${list.length} read · ${kept.length} candidate(s)`);
+    bySeed.set(seed.id, kept);
+  }
+  if (!bySeed.size) throw new Error('every seed failed to load — nothing was explored (this is not "no candidates").');
+  return interleaveBySeed(bySeed);
+}
+
+const describe = (c) => `${c.handle} (${c.targetId})${c.seed ? ` [seed @@${c.seed}]` : ''}`;
 
 async function main() {
-  const { mode, dryRun, max, delayMin, delayMax, posts } = parseFollowArgs(process.argv);
+  const { mode, dryRun, max, delayMin, delayMax, posts, seeds, seedSide, minFollowers, maxFollowers } =
+    parseFollowArgs(process.argv, { explore: true });
 
-  // 1) own userId + candidates — browserless in both modes. A dry run ends here, no CDP.
+  // 1) own userId + candidates — browserless in every mode. A dry run ends here, no CDP.
   const myUserId = await resolveMyUserId();
   const ledgerIds = followedIds(CHANNEL);
 
   let via, candidates;
-  if (mode === 'follow-back') {
+  if (mode === 'explore') {
+    via = 'explore';
+    const side = seedSideFor(CHANNEL, seedSide);
+    const seedList = seedsFor(CHANNEL, seeds);
+    const myWriters = await fetchAllBrowserless(myUserId, 'writers');
+    const myWriterSet = new Set(myWriters.map((u) => u.userId));
+    console.error(`  ↳ ${seedList.length} seed(s) · side=${side} · excluding ${myWriterSet.size} you already follow`);
+    candidates = (await exploreCandidates(seedList, side, myWriterSet, myUserId, { minFollowers, maxFollowers }))
+      .filter((c) => !ledgerIds.has(c.targetId));
+  } else if (mode === 'follow-back') {
     via = 'follow-back';
     const followers = await fetchAllBrowserless(myUserId, 'followers');
     const followings = await fetchAllBrowserless(myUserId, 'writers');
@@ -256,7 +313,11 @@ async function main() {
   }
 
   // 3) real follows — only now open the CDP browser and click in-page.
-  warnRealRun(CHANNEL, 'Brunch has no unfollow endpoint here, so a follow cannot be undone by this tool.');
+  warnRealRun(
+    CHANNEL,
+    'Brunch has no unfollow endpoint here, so a follow cannot be undone by this tool.' +
+    (via === 'explore' ? ' These are cold candidates with no prior connection to you — split the run with --max.' : ''),
+  );
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { noDefaults: true });
   try {
     const ctx = browser.contexts()[0];

@@ -201,10 +201,12 @@ from a public URL rather than accepting an upload — so it needs two extra step
 loudly instead of falling back to text.
 
 1. **Write a card spec** to `$CROSSPOST_HOME/cards/<slug>.json`. You write this, not a
-   sub-tool. Aim for 4–8 cards; card 1 is a cover and is the only card most people see:
+   sub-tool. Card 1 is a cover and is the only card most people see. **Use as many cards as the
+   content needs** — there is no ceiling on a reel, because a cut lasts as long as its text takes
+   to read, so card count says nothing about length. Four is the floor.
 
    ```json
-   { "format": "carousel", "subject": "<short label for the footer>",
+   { "format": "reels", "subject": "<short label for the footer>",
      "cards": [
        { "type": "cover",     "eyebrow": "…", "headline": "…", "sub": "…", "invert": true },
        { "type": "stat",      "value": "3.4s", "label": "…", "note": "…" },
@@ -213,8 +215,11 @@ loudly instead of falling back to text.
        { "type": "quote",     "quote": "…", "attribution": "…" } ] }
    ```
 
-   Keep every line inside the caps in `scripts/instagram/card-rules.mjs` — the renderer rejects
-   the spec otherwise, and it also fails when text overflows its box at render time.
+   Keep each card inside the caps in `scripts/instagram/card-rules.mjs` — the renderer rejects
+   the spec otherwise, and it also fails when text overflows its box at render time. For `body`
+   and `checklist` the cap is the **card total** (heading + text + every item share one budget),
+   so a long heading buys fewer items. That budget is deliberately roomy: cards that only list
+   bullets, with no room to explain them, are the failure mode it exists to prevent.
 
 2. **Write the caption** to `$CROSSPOST_HOME/posts/<slug>.insta.txt`: 600–850 characters, the
    first line matching the canonical post's opening line, and **the canonical URL spelled out**.
@@ -225,20 +230,24 @@ loudly instead of falling back to text.
 
    ```bash
    cd ${CLAUDE_PLUGIN_ROOT}/scripts/instagram
-   node gen-cards.mjs <slug>                  # or: --reels && node gen-reel.mjs <slug>
+   node gen-cards.mjs <slug> && node gen-reel.mjs <slug>   # reel — the default
    # publish $CROSSPOST_HOME/media/<slug>/ to the user's public host
    node check-cards.mjs <slug>
-   node post-api.mjs <slug> --dry-run         # containers only — proves Meta can fetch the URLs
+   node post-api.mjs <slug> --dry-run         # container only — proves Meta can fetch the URL
    node post-api.mjs <slug> --skip-done
    ```
+
+   For a carousel, add `--carousel` to `gen-cards.mjs`, `check-cards.mjs` and `post-api.mjs`
+   (or set `"format": "carousel"` in the spec, which the render and gate paths honour).
 
 **Nothing here is fixable after publishing.** Media cannot be replaced, and a caption edit is
 accepted by the API and then frequently ignored. Treat `check-cards.mjs` and `--dry-run` as the
 real gate, and look at the rendered images before publishing.
 
-Carousel or reel? Use a **carousel** when the content rewards stopping — code, a comparison, a
-checklist. Use a **reel** when the claim compresses to one sentence and the cards carry numbers
-or contrast; a reel gets no second read.
+**Reels are the default and should stay the default.** They are the surface Instagram
+distributes, and every tool here assumes them unless told otherwise. Reach for `--carousel` only
+when the content genuinely rewards stopping on a frame — code, a table, a side-by-side — because
+a reel gets no second read. Write the caption for a reel either way: it is the same file.
 
 `--skip-done` prevents duplicate posts (each channel keeps its own ledger). Pass the
 **canonical** path even when variants exist — the script picks the right body.
@@ -394,10 +403,11 @@ points at a deleted post, stats will show it as a lookup failure — prune those
 
 ## 10. Follow / follow-back (`/publish follow`, `f`)
 
-Each channel ships `scripts/<channel>/follow.mjs` with two modes — **follow-back** (people who
-follow you and you don't follow) and **follow-likers** (people who reacted to your recent posts).
-Shared safety behavior (ledger dedup, per-run cap, delay between follows, dry-run) lives in
-`scripts/lib/follow-core.mjs`, and every attempt is recorded in
+Each channel ships `scripts/<channel>/follow.mjs` with up to three modes — **follow-back** (people
+who follow you and you don't follow), **follow-likers** (people who reacted to your recent posts)
+and **explore** (accounts with no connection to you at all, found in a seed account's
+neighbourhood). Shared safety behavior (ledger dedup, per-run cap, delay between follows, dry-run)
+lives in `scripts/lib/follow-core.mjs`, and every attempt is recorded in
 `$CROSSPOST_HOME/ledgers/follows-<channel>.json`.
 
 **Automated following breaks most platforms' terms of service.** LinkedIn's User Agreement
@@ -409,6 +419,7 @@ So this branch is **preview-first and gated**, and it is never run without the u
 |---|---|
 | `--follow-back` | x · remember · brunch · naver-blog · linkedin · threads · instagram · facebook (8) |
 | `--follow-likers` | x · remember · brunch · linkedin · threads · instagram · facebook (7 — Naver has no liker surface) |
+| `--follow-explore` | x · brunch · threads · instagram · facebook (5 — the rest cannot read another account's list) |
 
 **Procedure:**
 
@@ -457,6 +468,35 @@ So this branch is **preview-first and gated**, and it is never run without the u
 - **naver-blog** has no liker surface at all (`✗`, not "no data").
 - **linkedin** answers 405 for a minority of targets; those are recorded `blocked` so later runs
   stop re-firing a refused write.
+
+### Explore (`--follow-explore`) — cold outreach, run it separately
+
+**Do not fold explore into `/publish follow`.** The other two modes act on people who already
+reached for you; explore proposes strangers mined from somebody else's audience, and it produces
+hundreds of candidates where the others produce a handful. Run it only when the user asks for
+discovery specifically, and preview it on its own.
+
+```bash
+cd ${CLAUDE_PLUGIN_ROOT}/scripts/<channel> && node follow.mjs --follow-explore --dry-run
+cd ${CLAUDE_PLUGIN_ROOT}/scripts/<channel> && node follow.mjs --follow-explore --max 2
+```
+
+- **Seeds are user configuration**, in `$CROSSPOST_HOME/follow-seeds.json` (`{"x": ["handle", …]}`),
+  or `--seed <account>` for one run. Nothing ships preconfigured — whose neighbourhood is worth
+  mining depends entirely on the topic. With no seeds the run stops and says so; it never reports
+  "0 candidates", which would read as "nobody left to follow".
+- **`--max` defaults to 3 here** regardless of the channel's other defaults, and the run prints to
+  stderr how many candidates the cap left untouched. A `capped=366` inside the summary line is
+  not "handled".
+- `--seed-side` picks which side of the seed to read: `following` (default — a curated list) or
+  `followers` (open to anyone, useful for small niche seeds). Threads only has followers and
+  refuses the other value; Facebook defaults to followers because pages follow almost nobody.
+- Quality floor `--min-followers 30` / `--max-followers 50000`. An account whose follower count
+  cannot be read is dropped, not assumed fine. **Facebook cannot filter this way at all** — its
+  listing carries no metrics, so the only screen is opening each profile for a follow button.
+- **Brunch cannot undo a follow** (no unfollow endpoint is known), so split its runs with `--max`.
+- Existing friends are excluded on Facebook even when a follow button is present: a friend's
+  profile shows no following/unfollow label afterwards, so the follow could never be confirmed.
 
 **Facebook friend requests are a separate tool**, never part of a follow run:
 

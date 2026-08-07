@@ -9,19 +9,43 @@
  */
 
 // Per-type character caps. `gate` fails the check; `warn` is the comfortable target.
-// These are deliberately conservative — a card that overflows its box is unrecoverable once
-// published, while a slightly short line costs nothing.
+//
+// The caps are measured two different ways, because the cards are built two different ways:
+//
+//   body / checklist   PER CARD — heading, text and every item share one budget. These types
+//                      stack lines in the same box, so capping each line separately lets a
+//                      four-item checklist carry four times the text of a one-item one while
+//                      both "pass".
+//   cover / stat / quote   PER LINE — one dominant element (an 84px headline, a 180px number,
+//                      a 62px pull quote) plus a short secondary. There is no stack to sum.
+//
+// body/checklist were raised from 90/100 (per line) to 130/160 (per card): the old numbers made
+// cards that could only list bullets, with no room to explain them. Overflow is still caught for
+// real by gen-cards.mjs, which measures `scrollHeight - clientHeight` in the page and refuses to
+// write a clipped render — these caps are the earlier, cheaper gate, not the only one.
 export const CAPS = {
   cover: { gate: 65, warn: 60 },
   stat: { gate: 65, warn: 60 },
   quote: { gate: 65, warn: 60 },
-  body: { gate: 90, warn: 75 },
-  checklist: { gate: 100, warn: 80 },
+  body: { gate: 130, warn: 105 },
+  checklist: { gate: 160, warn: 130 },
 };
 
-// Card counts. 10 is Instagram's carousel limit. The reels ceiling is about attention, not
-// the platform: at ~4-6s per cut, 8 cards is already ~45s.
-export const CNT = { carousel: [1, 10], reels: [3, 8] };
+/** Types whose cap is the card total rather than a per-line limit (see CAPS). */
+const BUDGETED = new Set(['body', 'checklist']);
+
+/** What the per-card budget actually counts — quoted back in the error so the author knows
+ *  which field to shorten. "over 130" alone sends people to trim the wrong line. */
+const BUDGET_FIELDS = {
+  body: 'heading + text + all items',
+  checklist: 'heading + all items',
+};
+
+// Card counts. 10 is Instagram's carousel limit — the platform's number, not ours.
+// Reels have no ceiling: card count is a poor proxy for length, because a cut lasts as long as
+// its text takes to read (or its narration to speak), not as long as a fixed slot. The lower
+// bound stays — it is a quality floor, not a cap.
+export const CNT = { carousel: [1, 10], reels: [4, Infinity] };
 
 export const EYEBROW_MAX = 24;   // small label above the headline
 export const SUBJECT_MAX = 19;   // short subject shown in the corner rail
@@ -44,6 +68,23 @@ const textOf = (card) => {
   }
 };
 
+/** Characters a budgeted card spends. `subject` is excluded — it renders in the footer, outside
+ *  the content box the budget is about, and it has its own SUBJECT_MAX. */
+const budgetLines = (card) => (card.type === 'checklist'
+  ? [card.heading, ...(card.items || [])]
+  : [card.heading, card.text, ...(card.items || [])]).filter((v) => typeof v === 'string');
+
+const budgetLen = (card) => budgetLines(card).join(' ').length;
+
+/** Per-field spend, so an over-budget card says where the characters went. */
+const breakdown = (card) => {
+  const parts = [];
+  if (card.heading) parts.push(`heading ${String(card.heading).length}`);
+  if (card.type !== 'checklist' && card.text) parts.push(`text ${String(card.text).length}`);
+  if (card.items?.length) parts.push(`${card.items.length} items ${card.items.join(' ').length}`);
+  return parts.join(' + ');
+};
+
 /**
  * Validate a card spec. Returns { errors, warnings } — errors block publishing.
  * `format` is 'carousel' | 'reels'.
@@ -58,7 +99,8 @@ export function validate(spec, { format = 'carousel' } = {}) {
 
   const [min, max] = CNT[format] || CNT.carousel;
   if (cards.length < min || cards.length > max) {
-    errors.push(`${format}: ${cards.length} cards is outside the allowed ${min}–${max}`);
+    const range = Number.isFinite(max) ? `${min}–${max}` : `${min} or more`;
+    errors.push(`${format}: ${cards.length} cards is outside the allowed ${range}`);
   }
 
   cards.forEach((card, i) => {
@@ -68,10 +110,25 @@ export function validate(spec, { format = 'carousel' } = {}) {
       return;
     }
     const cap = CAPS[card.type];
-    for (const line of textOf(card)) {
-      if (typeof line !== 'string') { errors.push(`card ${n}: non-string text`); continue; }
-      if (line.length > cap.gate) errors.push(`card ${n} (${card.type}): ${line.length} chars exceeds ${cap.gate} — "${line.slice(0, 30)}…"`);
-      else if (line.length > cap.warn) warnings.push(`card ${n} (${card.type}): ${line.length} chars is over the comfortable ${cap.warn}`);
+    const lines = textOf(card);
+    for (const line of lines) {
+      if (typeof line !== 'string') errors.push(`card ${n}: non-string text`);
+    }
+    if (BUDGETED.has(card.type)) {
+      // One budget for the whole card — see CAPS. Naming the fields matters: told only
+      // "over 130", an author trims the heading when the items are what overflowed.
+      const len = budgetLen(card);
+      if (len > cap.gate) {
+        errors.push(`card ${n} (${card.type}): ${len} chars exceeds ${cap.gate} for the card — the budget is ${BUDGET_FIELDS[card.type]} (${breakdown(card)})`);
+      } else if (len > cap.warn) {
+        warnings.push(`card ${n} (${card.type}): ${len} chars is over the comfortable ${cap.warn} for the card (${breakdown(card)})`);
+      }
+    } else {
+      for (const line of lines) {
+        if (typeof line !== 'string') continue;
+        if (line.length > cap.gate) errors.push(`card ${n} (${card.type}): ${line.length} chars exceeds ${cap.gate} — "${line.slice(0, 30)}…"`);
+        else if (line.length > cap.warn) warnings.push(`card ${n} (${card.type}): ${line.length} chars is over the comfortable ${cap.warn}`);
+      }
     }
     if (card.eyebrow && card.eyebrow.length > EYEBROW_MAX) errors.push(`card ${n}: eyebrow exceeds ${EYEBROW_MAX} chars`);
     if (card.subject && card.subject.length > SUBJECT_MAX) errors.push(`card ${n}: subject exceeds ${SUBJECT_MAX} chars`);

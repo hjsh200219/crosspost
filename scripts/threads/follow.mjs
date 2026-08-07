@@ -45,14 +45,20 @@
 // Also: the like COUNT on a post is the heart toggle itself — clicking it likes the post. This
 // file never clicks a post action row.
 //
-// usage: node follow.mjs (--follow-back|--follow-likers) [--dry-run] [--max N]
+// explore (cold discovery) points the same follower collector at a seed account's profile — the
+// followers modal is the only list surface Threads has, so `--seed-side following` is refused
+// rather than silently answered with followers.
+//
+// usage: node follow.mjs (--follow-back|--follow-likers|--follow-explore) [--dry-run] [--max N]
 //        [--delay-min S] [--delay-max S]
+//        explore only: [--seed <handle> …] [--min-followers N] [--max-followers N]
 //        node follow.mjs --verify <pk> <username>   # check a relationship, follow nothing
 // Requires a logged-in threads.com session in the shared CDP browser.
 
 import { chromium } from 'playwright';
 import { loadEnv, cdpPort } from '../lib/env.mjs';
 import { blockedIds, followedIds, parseFollowArgs, runFollows, warnRealRun } from '../lib/follow-core.mjs';
+import { seedsFor, seedSideFor, interleaveBySeed } from '../lib/follow-seeds.mjs';
 
 loadEnv();
 
@@ -92,17 +98,25 @@ function lastMatch(text, re) {
 
 function parseRelayUsers(html) {
   const re = /"pk":"(\d+)","text_post_app_is_private":(?:true|false|null),"username":"([a-zA-Z0-9_.]+)"/g;
+  const hits = [...html.matchAll(re)];
   const out = new Map();
-  let m;
-  while ((m = re.exec(html))) {
+  for (let i = 0; i < hits.length; i++) {
+    const m = hits[i];
     const [, pk, username] = m;
     const before = html.slice(Math.max(0, m.index - 300), m.index);
+    // The follower count sits AFTER the username, so it is read from this record's own span —
+    // from here to where the next user record starts. A fixed-width window would reach into the
+    // neighbouring record and attribute somebody else's count, and that number is used as a
+    // quality floor for cold follows.
+    const span = html.slice(m.index, i + 1 < hits.length ? hits[i + 1].index : m.index + 4000);
+    const fc = span.match(/"follower_count":(\d+)/);
     out.set(pk, {
       pk,
       username,
       following: lastMatch(before, /"following":(true|false)/g) === 'true',
       followedBy: lastMatch(before, /"followed_by":(true|false)/g) === 'true',
       outgoingRequest: lastMatch(before, /"outgoing_request":(true|false)/g) === 'true',
+      followerCount: fc ? Number(fc[1]) : null,
     });
   }
   return [...out.values()];
@@ -340,7 +354,7 @@ async function followUser(page, pk, username) {
   throw err;
 }
 
-const describe = (c) => `${c.handle} (${c.targetId})`;
+const describe = (c) => `${c.handle} (${c.targetId})${c.seed ? ` [seed @${c.seed}]` : ''}`;
 
 async function main() {
   const rawArgs = process.argv;
@@ -365,10 +379,23 @@ async function main() {
     return;
   }
 
-  const { mode, dryRun, max, delayMin, delayMax } = parseFollowArgs(rawArgs, { max: 3, delayMin: 90, delayMax: 300 });
+  const { mode, dryRun, max, delayMin, delayMax, seeds, seedSide, minFollowers, maxFollowers } =
+    parseFollowArgs(rawArgs, { max: 3, delayMin: 90, delayMax: 300, explore: true });
+
+  // Threads exposes one side only: a profile carries a follower count button and no following
+  // list at all. Asked for the side that does not exist, this refuses rather than quietly
+  // reading the other one — silently answering a different question is worse than stopping.
+  if (mode === 'explore' && seedSideFor(CHANNEL, seedSide) !== 'followers') {
+    console.error('threads: --seed-side following is not available — a Threads profile exposes no following list. Use --seed-side followers.');
+    process.exit(1);
+  }
 
   if (!dryRun) {
-    warnRealRun(CHANNEL, 'Meta polices follow automation aggressively, and a follow on a private account sends a follow REQUEST.');
+    warnRealRun(
+      CHANNEL,
+      'Meta polices follow automation aggressively, and a follow on a private account sends a follow REQUEST.' +
+      (mode === 'explore' ? ' Explore targets have no prior connection to you — this is cold outreach.' : ''),
+    );
   }
 
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { noDefaults: true });
@@ -381,7 +408,32 @@ async function main() {
     const refused = blockedIds(CHANNEL);
 
     let via, candidates;
-    if (mode === 'follow-back') {
+    if (mode === 'explore') {
+      via = 'explore';
+      const seedList = seedsFor(CHANNEL, seeds);
+      const bySeed = new Map();
+      for (const s of seedList) {
+        let users;
+        try {
+          await page.goto(`https://www.threads.com/@${encodeURIComponent(s.id)}`, { waitUntil: 'domcontentloaded', timeout: 25000 });
+          await page.waitForTimeout(2500);
+          ({ users } = await collectAllFollowers(page)); // same collector as follow-back — it reads whatever profile is open
+        } catch (e) {
+          console.error(`  ↳ [skip] seed @${s.id}: ${e.message}`);
+          continue;
+        }
+        const kept = users
+          .filter((u) => !u.following && !u.outgoingRequest && !ledgerIds.has(u.pk) && !refused.has(u.pk))
+          // No count means the record did not carry one. On cold outreach an unknown account is
+          // dropped rather than assumed acceptable.
+          .filter((u) => u.followerCount != null && u.followerCount >= minFollowers && u.followerCount <= maxFollowers)
+          .map((u) => ({ targetId: u.pk, handle: u.username, seed: s.id }));
+        console.error(`  ↳ seed @${s.id}/followers: ${users.length} record(s) · ${kept.length} candidate(s)`);
+        bySeed.set(s.id, kept);
+      }
+      if (!bySeed.size) throw new Error('every seed failed to load — nothing was explored (this is not "no candidates").');
+      candidates = interleaveBySeed(bySeed);
+    } else if (mode === 'follow-back') {
       via = 'follow-back';
       const handle = await resolveOwnHandle(page);
       console.error(`  ↳ own handle=@${handle}${PROFILE_HANDLE ? ' (THREADS_HANDLE)' : ' (derived from the session)'}`);

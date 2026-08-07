@@ -2,7 +2,7 @@
 /**
  * Assemble reel frames into an mp4 slideshow.
  *
- *   node gen-cards.mjs <slug> --reels && node gen-reel.mjs <slug>
+ *   node gen-cards.mjs <slug> && node gen-reel.mjs <slug>
  *   node gen-reel.mjs <slug> --audio track.m4a     # optional soundtrack (licensing is on you)
  *
  * Reads $CROSSPOST_HOME/build/<slug>/reel-NN.jpg and writes
@@ -41,7 +41,7 @@ const OUT = join(OUT_DIR, 'reel.mp4');
 
 const frames = existsSync(BUILD) ? readdirSync(BUILD).filter((f) => /^reel-\d+\.jpg$/.test(f)).sort() : [];
 if (!frames.length) {
-  console.error(`no frames in ${BUILD.replace(home(), '$CROSSPOST_HOME')} — run: node gen-cards.mjs ${slug} --reels`);
+  console.error(`no frames in ${BUILD.replace(home(), '$CROSSPOST_HOME')} — run: node gen-cards.mjs ${slug}`);
   process.exit(1);
 }
 
@@ -53,7 +53,7 @@ try { spec = JSON.parse(readFileSync(dataPath(`cards/${slug}.json`), 'utf8')); s
 // spec이 있는데 프레임 수가 다르면 stale 프레임이 섞인 것 — 그대로 concat하면
 // 옛 콘텐츠가 reel.mp4에 영구히 박힌다(IG는 발행 후 미디어 교체 불가).
 if (specOk && Array.isArray(spec.cards) && spec.cards.length && spec.cards.length !== frames.length) {
-  console.error(`frame count (${frames.length}) != spec cards (${spec.cards.length}) — stale frames in ${BUILD.replace(home(), '$CROSSPOST_HOME')}; re-run: node gen-cards.mjs ${slug} --reels`);
+  console.error(`frame count (${frames.length}) != spec cards (${spec.cards.length}) — stale frames in ${BUILD.replace(home(), '$CROSSPOST_HOME')}; re-run: node gen-cards.mjs ${slug}`);
   process.exit(1);
 }
 const charsOf = (card) => JSON.stringify(card || {}).replace(/[^\p{L}\p{N}]/gu, '').length;

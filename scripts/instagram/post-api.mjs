@@ -2,8 +2,8 @@
 /**
  * Instagram publisher — Instagram Graph API (Content Publishing).
  *
- *   node post-api.mjs <slug>                  # image / carousel
- *   node post-api.mjs <slug> --reels          # reel (single video)
+ *   node post-api.mjs <slug>                  # reel (single video) — the default format
+ *   node post-api.mjs <slug> --carousel       # image / carousel
  *   node post-api.mjs <slug> --dry-run        # build containers, don't publish
  *   node post-api.mjs <slug> --skip-done      # skip if (slug, format) is already in the ledger
  *   node post-api.mjs <slug> --media a.jpg,b.jpg   # explicit media (URLs or paths under the media base)
@@ -21,8 +21,8 @@
  * Media resolution, in order:
  *   --media a.jpg,b.jpg                     explicit; absolute URLs used as-is
  *   $CROSSPOST_HOME/posts/<slug>.insta.media  one URL or path per line (comments with #)
- *   $CROSSPOST_HOME/media/<slug>/card-NN.jpg  what gen-cards.mjs writes (needs the base URL)
- *   $CROSSPOST_HOME/media/<slug>/reel.mp4     for --reels
+ *   $CROSSPOST_HOME/media/<slug>/reel.mp4     the default (reels)
+ *   $CROSSPOST_HOME/media/<slug>/card-NN.jpg  what gen-cards.mjs --carousel writes
  *
  * Caption: `$CROSSPOST_HOME/posts/<slug>.insta.txt`, falling back to the canonical post body.
  *
@@ -118,10 +118,12 @@ if (delId) {
 
 const slug = args.find((a) => !a.startsWith('--') && a !== flag('--media'));
 const dryRun = args.includes('--dry-run');
-const REELS = args.includes('--reels');
 const skipDone = args.includes('--skip-done');
-if (!slug) { console.error('usage: node post-api.mjs <slug> [--reels] [--dry-run] [--skip-done] [--media a.jpg,b.jpg]'); process.exit(1); }
-const format = REELS ? 'reels' : 'carousel';
+if (!slug) { console.error('usage: node post-api.mjs <slug> [--carousel] [--dry-run] [--skip-done] [--media a.jpg,b.jpg]'); process.exit(1); }
+// Reels are the default; a carousel is opt-in. `--reels` stays accepted so existing callers and
+// scripts keep working, it just no longer changes anything.
+const format = args.includes('--carousel') ? 'carousel' : 'reels';
+const REELS = format === 'reels';
 
 // Idempotence guard for retries. It keys on (slug, format) rather than slug alone, because
 // publishing the same post as both a carousel and a reel is a legitimate thing to do.
@@ -163,12 +165,28 @@ if (explicit) {
 if (!media.length) {
   console.error(
     `no media for "${slug}". Instagram has no text-only post, so this fails instead of falling back.\n` +
-    `  · render cards:  node gen-cards.mjs ${slug}${REELS ? ' --reels && node gen-reel.mjs ' + slug : ''}\n` +
+    (REELS
+      ? `  · render a reel: node gen-cards.mjs ${slug} && node gen-reel.mjs ${slug}\n` +
+        `  · or, if this is a carousel: --carousel\n`
+      : `  · render cards:  node gen-cards.mjs ${slug} --carousel\n`) +
     `  · or list URLs:  ${listFile.replace(home(), '$CROSSPOST_HOME')}\n` +
     '  · or pass:       --media https://…/a.jpg,https://…/b.jpg',
   );
   process.exit(1);
 }
+// Format/media mismatch, caught here rather than at Meta. Now that reels are the default, a
+// caller who supplies images without --carousel would otherwise get a container error naming the
+// URL, which reads as a broken image rather than a wrong flag.
+const isVideo = (ref) => /\.(mp4|mov|m4v)(\?|$)/i.test(String(ref));
+if (REELS && !media.every(isVideo)) {
+  console.error(
+    `"${slug}" resolved to image media, but the format is reels (the default).\n` +
+    '  · publish it as a carousel: add --carousel\n' +
+    `  · or render a reel:         node gen-cards.mjs ${slug} && node gen-reel.mjs ${slug}`,
+  );
+  process.exit(1);
+}
+if (REELS && media.length > 1) { console.error(`a reel is a single video (${media.length} media given) — use --carousel for multiple items`); process.exit(1); }
 if (!REELS && media.length > 10) { console.error(`a carousel holds at most 10 items (${media.length} given)`); process.exit(1); }
 const urls = media.map(toUrl);
 

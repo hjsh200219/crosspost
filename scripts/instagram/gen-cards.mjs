@@ -2,9 +2,14 @@
 /**
  * Card renderer — a card spec (JSON) becomes Instagram-sized images.
  *
- *   node gen-cards.mjs <slug>            # 1080×1350 carousel cards → $CROSSPOST_HOME/media/<slug>/card-NN.jpg
- *   node gen-cards.mjs <slug> --reels    # 1080×1920 frames        → $CROSSPOST_HOME/build/<slug>/reel-NN.jpg
- *   node gen-cards.mjs <slug> --open     # also print the HTML path for eyeballing
+ *   node gen-cards.mjs <slug>              # 1080×1920 reel frames  → $CROSSPOST_HOME/build/<slug>/reel-NN.jpg
+ *   node gen-cards.mjs <slug> --carousel   # 1080×1350 cards        → $CROSSPOST_HOME/media/<slug>/card-NN.jpg
+ *   node gen-cards.mjs <slug> --open       # also print the HTML path for eyeballing
+ *
+ * Reels are the default format. A carousel is still supported (`--carousel`, or "format":
+ * "carousel" in the spec) but it is the exception now, not the starting point: reels are the
+ * surface Instagram distributes, and a carousel only pays for itself when the content rewards
+ * stopping on a frame — code, a table, a comparison.
  *
  * Instagram is the only channel here that cannot publish text, so every post needs images.
  * This renders them from a spec you (or Claude) write to
@@ -36,22 +41,28 @@ import { validate } from './card-rules.mjs';
 loadEnv();
 
 const args = process.argv.slice(2);
-const REELS = args.includes('--reels');
 const slug = args.find((a) => !a.startsWith('--'));
-if (!slug) { console.error('usage: node gen-cards.mjs <slug> [--reels]'); process.exit(1); }
+if (!slug) { console.error('usage: node gen-cards.mjs <slug> [--carousel]'); process.exit(1); }
+
+const SPEC_PATH = dataPath(`cards/${slug}.json`);
+if (!existsSync(SPEC_PATH)) { console.error(`no card spec: ${SPEC_PATH}`); process.exit(1); }
+const spec = JSON.parse(readFileSync(SPEC_PATH, 'utf8'));
+
+// Format resolution: an explicit flag wins, then the spec, then the default (reels).
+// The spec is consulted so that re-rendering an existing carousel does not silently turn it into
+// a reel — the frames differ in size and safe area, and Instagram cannot replace media later.
+const format = args.includes('--carousel') ? 'carousel'
+  : args.includes('--reels') ? 'reels'
+  : (spec.format || 'reels');
+const REELS = format === 'reels';
 
 const W = 1080;
 const H = REELS ? 1920 : 1350;
 // Reels overlay chrome (caption block, action rail) covers the bottom and right of the frame.
 // Text placed there is simply not readable in the app, so the frame keeps it clear.
 const SAFE = REELS ? { bottom: 340, right: 200 } : { bottom: 96, right: 96 };
-const SPEC_PATH = dataPath(`cards/${slug}.json`);
 const OUT_DIR = REELS ? dataPath(`build/${slug}`) : dataPath(`media/${slug}`);
 const STEM = REELS ? 'reel' : 'card';
-
-if (!existsSync(SPEC_PATH)) { console.error(`no card spec: ${SPEC_PATH}`); process.exit(1); }
-const spec = JSON.parse(readFileSync(SPEC_PATH, 'utf8'));
-const format = REELS ? 'reels' : (spec.format || 'carousel');
 
 const { errors, warnings } = validate(spec, { format });
 for (const w of warnings) console.error(`  warn: ${w}`);

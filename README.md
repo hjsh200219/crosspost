@@ -184,6 +184,13 @@ Each channel has `scripts/<channel>/follow.mjs` with `--follow-back` and `--foll
 `--dry-run` previews without writing anything, `--max N` caps a run, and the follow ledger lives
 in `~/.crosspost/ledgers/follows-<channel>.json`.
 
+Five channels (x, brunch, threads, instagram, facebook) also have **`--follow-explore`**: cold
+discovery through a seed account's neighbourhood. It is deliberately *not* part of
+`/publish follow` — the other modes act on people who already reached for you, this one proposes
+strangers, so it is run on its own. Seeds are yours to configure in
+`~/.crosspost/follow-seeds.json` (`{"x": ["handle", …]}`) or per run with `--seed`; with none
+configured the tool stops rather than reporting zero candidates. `--max` defaults to **3** here.
+
 > **Automated following is against most platforms' terms of service**, and LinkedIn and the Meta
 > channels restrict accounts that do it. These tools default to a small cap, a long randomized
 > delay, and a warning on any non-dry run — and `/publish follow` previews first and asks before
@@ -228,11 +235,15 @@ Instagram is the one channel that cannot publish text, and its API does not acce
 uploads — Meta fetches `image_url` / `video_url` from a **public URL**. So this channel has a
 prerequisite the others don't: somewhere to host the media.
 
+**Reels are the default format.** Carousels still work — pass `--carousel` to `gen-cards.mjs`,
+`check-cards.mjs` and `post-api.mjs`, or set `"format": "carousel"` in the spec — but they are
+the exception, for content that rewards stopping on a frame (code, a table, a comparison).
+
 ```bash
 # 1. write a card spec (or have Claude write it) → $CROSSPOST_HOME/cards/<slug>.json
-node scripts/instagram/gen-cards.mjs <slug>              # → $CROSSPOST_HOME/media/<slug>/card-NN.jpg
-node scripts/instagram/gen-cards.mjs <slug> --reels      # → build/<slug>/reel-NN.jpg
+node scripts/instagram/gen-cards.mjs <slug>              # reel frames → build/<slug>/reel-NN.jpg
 node scripts/instagram/gen-reel.mjs  <slug>              # → media/<slug>/reel.mp4  (needs ffmpeg)
+node scripts/instagram/gen-cards.mjs <slug> --carousel   # → $CROSSPOST_HOME/media/<slug>/card-NN.jpg
 
 # 2. publish that media directory somewhere public, then point the base URL at it
 #    CROSSPOST_MEDIA_BASE_URL=https://example.com/media
@@ -473,6 +484,12 @@ cd <플러그인 루트> && npm run browser     # 창에서 카카오(브런치)
 채널마다 `scripts/<channel>/follow.mjs`가 `--follow-back`·`--follow-likers` 두 모드를 제공한다.
 `--dry-run`은 아무것도 쓰지 않고 후보만 보여주고, `--max N`이 한 실행의 상한이며, 팔로우 장부는
 `~/.crosspost/ledgers/follows-<channel>.json`이다.
+
+5개 채널(x·brunch·threads·instagram·facebook)에는 **`--follow-explore`**가 더 있다 — 씨앗 계정의
+인접 그래프에서 접점 없는 계정을 발굴하는 콜드 모드다. 앞의 두 모드가 이미 나에게 반응한 사람을
+대상으로 하는 것과 달라서 **`/publish follow` 일괄에 넣지 않고 따로 실행한다.** 씨앗은 사용자가
+`~/.crosspost/follow-seeds.json`(`{"x": ["handle", …]}`)에 등록하거나 실행마다 `--seed`로 준다.
+씨앗이 없으면 "후보 0"이 아니라 큰 소리로 멈춘다. 이 모드의 `--max` 기본값은 **3**이다.
 
 > **자동 팔로우는 대부분 플랫폼의 약관 위반**이고, LinkedIn과 Meta 채널은 이를 이유로 계정을
 > 제한한다. 그래서 기본값이 작은 상한 + 긴 랜덤 지연이고 비-dry 실행마다 경고가 뜨며,

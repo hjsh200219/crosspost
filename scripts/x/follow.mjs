@@ -7,14 +7,21 @@
 // Dedup, cap, delay and dry-run live in ../lib/follow-core.mjs. The follow ledger is
 // ledgers/follows-x.json, separate from published-x.json.
 //
+// explore (cold discovery) also works here: `GET /2/users/:id/{followers,following}` answers for
+// an arbitrary account and returns `public_metrics` inline, so the quality floor costs no extra
+// request. Reads are billed on the pay-per-use plan, so one page (100 accounts) per seed.
+//
 // **Without --dry-run this really follows people from your account.**
-// usage: node follow.mjs (--follow-back|--follow-likers) [--dry-run] [--max N]
+// usage: node follow.mjs (--follow-back|--follow-likers|--follow-explore) [--dry-run] [--max N]
 //        [--delay-min S] [--delay-max S] [--posts N]
+//        explore only: [--seed <handle> …] [--seed-side following|followers]
+//                      [--min-followers N] [--max-followers N]
 
 import { readFileSync, existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { loadEnv, dataPath } from '../lib/env.mjs';
-import { followedIds, parseFollowArgs, runFollows } from '../lib/follow-core.mjs';
+import { blockedIds, followedIds, parseFollowArgs, runFollows, warnRealRun } from '../lib/follow-core.mjs';
+import { seedsFor, seedSideFor, interleaveBySeed } from '../lib/follow-seeds.mjs';
 
 loadEnv();
 
@@ -142,21 +149,71 @@ async function likerCandidates(postCount) {
   return [...byId.values()];
 }
 
-const describe = (c) => `@${c.handle} (${c.targetId})${c.srcPost ? ` [via ${c.srcPost}]` : ''}`;
+// --- explore: one page of a seed's adjacency graph ---
+// `user.fields=public_metrics` means the quality floor is applied from the listing itself, with
+// no per-candidate lookup — every extra call here is billed and is another automated read.
+async function seedNeighbours(handle, side) {
+  const seed = await apiGet('/users/by/username/' + encodeURIComponent(handle));
+  const id = seed?.data?.id;
+  if (!id) throw new Error(`seed @${handle}: no such account`);
+  const body = await apiGet(`/users/${id}/${side}`, {
+    max_results: 100,
+    'user.fields': 'username,public_metrics,protected',
+  });
+  return (body.data || []).map((u) => ({
+    id: u.id,
+    username: u.username,
+    followers: u.public_metrics?.followers_count ?? null,
+    protected: !!u.protected,
+  }));
+}
+
+const describe = (c) => `@${c.handle} (${c.targetId})${c.seed ? ` [seed @${c.seed}]` : ''}${c.srcPost ? ` [via ${c.srcPost}]` : ''}`;
 
 async function main() {
   if (!CK || !CS || !AT || !AS) {
     throw new Error('X credentials missing — set X_API_KEY / X_API_SECRET / X_ACCESS_TOKEN / X_ACCESS_SECRET in $CROSSPOST_HOME/.env');
   }
-  const { mode, dryRun, max, delayMin, delayMax, posts } = parseFollowArgs(process.argv);
+  const { mode, dryRun, max, delayMin, delayMax, posts, seeds, seedSide, minFollowers, maxFollowers } =
+    parseFollowArgs(process.argv, { explore: true });
+
+  if (mode === 'explore' && !dryRun) {
+    warnRealRun(CHANNEL, 'explore follows accounts with no prior connection to you — cold outreach, not a follow-back.');
+  }
 
   const myId = await getMe();
   const following = await listFollowing(myId);
   const ledgerIds = followedIds(CHANNEL);
-  const isCandidate = (id) => !following.has(id) && !ledgerIds.has(id);
+  const blocked = blockedIds(CHANNEL);
+  const isCandidate = (id) => !following.has(id) && !ledgerIds.has(id) && !blocked.has(id) && id !== myId;
 
   let via, candidates;
-  if (mode === 'follow-back') {
+  if (mode === 'explore') {
+    via = 'explore';
+    const side = seedSideFor(CHANNEL, seedSide);
+    const list = seedsFor(CHANNEL, seeds);
+    const bySeed = new Map();
+    for (const s of list) {
+      let people;
+      try { people = await seedNeighbours(s.id, side); } catch (e) {
+        console.error(`  ↳ [skip] seed @${s.id}: ${e.message}`);
+        if (e.fatal) throw e;
+        continue;
+      }
+      const kept = people
+        .filter((u) => isCandidate(u.id) && !u.protected)
+        // A follower count is the only quality signal available without a second request. Both
+        // ends matter: below the floor is usually an empty or bot account, above the ceiling is
+        // a celebrity who will never notice. `null` is unknown, and on cold outreach unknown is
+        // excluded rather than assumed fine.
+        .filter((u) => u.followers != null && u.followers >= minFollowers && u.followers <= maxFollowers)
+        .map((u) => ({ targetId: u.id, handle: u.username, seed: s.id }));
+      console.error(`  ↳ seed @${s.id}/${side}: ${people.length} read · ${kept.length} candidate(s)`);
+      bySeed.set(s.id, kept);
+    }
+    if (!bySeed.size) throw new Error('every seed failed to load — nothing was explored (this is not "no candidates").');
+    candidates = interleaveBySeed(bySeed);
+  } else if (mode === 'follow-back') {
     via = 'follow-back';
     const followers = await listFollowers(myId);
     console.error(`  ↳ followers=${followers.length} following=${following.size}`);

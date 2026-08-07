@@ -40,13 +40,20 @@
 // used here — same namespace trap as above. Threads' identical-looking endpoint returns a count
 // with an empty users array; do not assume one channel's result transfers to the other.
 //
-// usage: node follow.mjs (--follow-back|--follow-likers) [--dry-run] [--max N]
+// explore (cold discovery) reads a seed account's `friendships/<pk>/{following,followers}` — the
+// same endpoints answer for an arbitrary public account. Those rows carry no metrics, so the
+// quality floor needs a second call per candidate (`web_profile_info`), which is capped.
+//
+// usage: node follow.mjs (--follow-back|--follow-likers|--follow-explore) [--dry-run] [--max N]
 //        [--delay-min S] [--delay-max S] [--posts N]
+//        explore only: [--seed <username> …] [--seed-side following|followers]
+//                      [--min-followers N] [--max-followers N]
 // Requires a logged-in instagram.com session in the shared CDP browser.
 
 import { chromium } from 'playwright';
 import { loadEnv, cdpPort } from '../lib/env.mjs';
-import { followedIds, parseFollowArgs, runFollows, warnRealRun } from '../lib/follow-core.mjs';
+import { blockedIds, followedIds, parseFollowArgs, runFollows, warnRealRun } from '../lib/follow-core.mjs';
+import { seedsFor, seedSideFor, interleaveBySeed } from '../lib/follow-seeds.mjs';
 
 loadEnv();
 
@@ -119,7 +126,23 @@ async function igFetch(cookie, path) {
   });
   const text = await res.text();
   if (res.status !== 200) throw classify(res.status, text, path);
-  try { return JSON.parse(text); } catch { throw new Error(`${path} returned unparseable data: ${text.slice(0, 160)}`); }
+  try { return JSON.parse(text); } catch {
+    // A 200 carrying the app shell instead of JSON is an endpoint block on the account, not a
+    // parse problem and not a session problem — the session can be perfectly alive, and the same
+    // URL fetched from inside a logged-in instagram.com document answers the same way. Swapping
+    // HTTP clients does not help. Left as "unparseable data" it reads like a transient glitch and
+    // invites a retry loop, so it is called out and made fatal.
+    if (/^\s*<(!doctype|html)/i.test(text)) {
+      const err = new Error(
+        `${path} answered HTTP 200 with HTML instead of JSON — Instagram is blocking this endpoint for the account. ` +
+        'Retrying, re-logging in and changing HTTP client all make no difference; leave it for a day.',
+      );
+      err.fatal = true;
+      err.endpointBlocked = true;
+      throw err;
+    }
+    throw new Error(`${path} returned unparseable data: ${text.slice(0, 160)}`);
+  }
 }
 
 async function resolveMyId(cookie) {
@@ -192,6 +215,54 @@ async function listLikers(cookie, media) {
   return [...byPk.values()];
 }
 
+// --- explore: mine a seed account's neighbourhood ---
+// Two stages, because the list rows carry no metrics. A `friendships/<pk>/{following,followers}`
+// entry has pk, username, is_private, has_anonymous_profile_picture and little else — no follower
+// count and no friendship_status. So: filter on what the listing does say, then spend one
+// `web_profile_info` per survivor, capped. That single call answers everything left — follower
+// count, post count, and whether you already follow them — so the per-candidate
+// `friendships/show` used elsewhere is not needed here.
+const EXPLORE_SEED_PAGES = 5;   // 5 × 12 = 60 accounts per seed
+const ENRICH_CAP = 40;          // upper bound on profile lookups per run — every one is another
+                                // automated read on an account Meta already watches
+
+async function listPeopleOf(cookie, pk, kind, pages) {
+  const byPk = new Map();
+  let maxId = null;
+  for (let i = 0; i < pages; i++) {
+    const qs = `?count=${PAGE_SIZE}` + (maxId ? `&max_id=${encodeURIComponent(maxId)}` : '');
+    const data = await igFetch(cookie, `/api/v1/friendships/${pk}/${kind}/${qs}`);
+    const users = data.users || [];
+    for (const u of users) {
+      const id = String(u.pk);
+      if (!byPk.has(id)) {
+        byPk.set(id, {
+          pk: id,
+          username: u.username,
+          isPrivate: !!u.is_private,
+          defaultAvatar: !!u.has_anonymous_profile_picture,
+        });
+      }
+    }
+    if (!data.has_more || !users.length) break;
+    maxId = data.next_max_id;
+  }
+  return [...byPk.values()];
+}
+
+async function profileOf(cookie, username) {
+  const data = await igFetch(cookie, `/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`);
+  const u = data?.data?.user;
+  if (!u) return null;
+  return {
+    id: u.id,
+    followers: u.edge_followed_by?.count ?? null,
+    posts: u.edge_owner_to_timeline_media?.count ?? 0,
+    following: !!u.followed_by_viewer,
+    requested: !!u.requested_by_viewer,
+  };
+}
+
 async function followUser(page, cookie, pk, username) {
   await page.goto(`https://www.instagram.com/${username}/`, { waitUntil: 'domcontentloaded', timeout: 25000 });
   await page.waitForTimeout(2000);
@@ -221,18 +292,22 @@ async function followUser(page, cookie, pk, username) {
   }
 }
 
-const describe = (c) => `${c.handle} (${c.targetId})`;
+const describe = (c) => `${c.handle} (${c.targetId})${c.seed ? ` [seed @${c.seed}]` : ''}`;
 
 async function main() {
-  const parsed = parseFollowArgs(process.argv, { max: 3, delayMin: 90, delayMax: 300 });
-  const { mode, dryRun, max, delayMin, delayMax, posts } = parsed;
+  const parsed = parseFollowArgs(process.argv, { max: 3, delayMin: 90, delayMax: 300, explore: true });
+  const { mode, dryRun, max, delayMin, delayMax, posts, seeds, seedSide, minFollowers, maxFollowers } = parsed;
 
   if (!USERNAME) {
     console.error('IG_USERNAME is not set in $CROSSPOST_HOME/.env — it is the account whose followers/likers are read (not IG_USER_ID).');
     process.exit(1);
   }
   if (!dryRun) {
-    warnRealRun(CHANNEL, 'Meta polices follow automation aggressively, and a follow on a private account sends a follow REQUEST.');
+    warnRealRun(
+      CHANNEL,
+      'Meta polices follow automation aggressively, and a follow on a private account sends a follow REQUEST.' +
+      (mode === 'explore' ? ' Explore targets have no prior connection to you — this is cold outreach.' : ''),
+    );
   }
 
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { noDefaults: true });
@@ -244,11 +319,69 @@ async function main() {
 
     const { id: myId, followerCount, followingCount } = await resolveMyId(cookie);
     const ledgerIds = followedIds(CHANNEL);
+    const blocked = blockedIds(CHANNEL);
     const pageForWrites = async () => {
       const p = ctx.pages().find((x) => x.url().includes('instagram.com')) || ctx.pages()[0] || (await ctx.newPage());
       await p.bringToFront().catch(() => {});
       return p;
     };
+
+    if (mode === 'explore') {
+      const side = seedSideFor(CHANNEL, seedSide);
+      const kind = side === 'following' ? 'following' : 'followers';
+      const seedList = seedsFor(CHANNEL, seeds);
+      const bySeed = new Map();
+      let enrichBudget = ENRICH_CAP;
+      let readFailures = 0;
+      for (const s of seedList) {
+        let rows;
+        try {
+          const seedProfile = await profileOf(cookie, s.id);
+          if (!seedProfile?.id) throw new Error('no such account');
+          rows = await listPeopleOf(cookie, seedProfile.id, kind, EXPLORE_SEED_PAGES);
+        } catch (e) {
+          readFailures++;
+          console.error(`  ↳ [skip] seed @${s.id}: ${e.message}`);
+          if (e.fatal) throw e; // an endpoint block or a dead session hits every seed the same way
+          continue;
+        }
+        const shortlist = rows.filter((u) => u.pk !== String(myId) && !u.isPrivate && !u.defaultAvatar
+          && !ledgerIds.has(u.pk) && !blocked.has(u.pk));
+        const kept = [];
+        for (const u of shortlist) {
+          if (enrichBudget <= 0) break;
+          enrichBudget--;
+          const p = await profileOf(cookie, u.username).catch((e) => {
+            // Some accounts answer 400 on this endpoint for reasons on Instagram's side. Skipping
+            // that candidate is right; treating it as a channel failure is not.
+            console.error(`  ↳ [skip] @${u.username}: ${e.message.slice(0, 100)}`);
+            return null;
+          });
+          if (!p) continue;
+          if (p.following || p.requested) continue;
+          if (p.posts < 1) continue;
+          if (p.followers == null || p.followers < minFollowers || p.followers > maxFollowers) continue;
+          kept.push({ targetId: u.pk, handle: u.username, seed: s.id });
+        }
+        console.error(`  ↳ seed @${s.id}/${kind}: ${rows.length} read · ${shortlist.length} shortlisted · ${kept.length} candidate(s)`);
+        bySeed.set(s.id, kept);
+      }
+      if (!bySeed.size) throw new Error(`every seed failed to load (${readFailures}) — nothing was explored (this is not "no candidates").`);
+      if (enrichBudget <= 0) console.error(`  !! profile-lookup budget (${ENRICH_CAP}) exhausted — some shortlisted accounts were never evaluated.`);
+      const candidates = interleaveBySeed(bySeed);
+
+      if (dryRun) {
+        await runFollows({ channel: CHANNEL, candidates, via: 'explore', dryRun, max, delayMin, delayMax, follow: async () => {}, describe });
+        return;
+      }
+      const ep = await pageForWrites();
+      await runFollows({
+        channel: CHANNEL, candidates, via: 'explore', dryRun, max, delayMin, delayMax,
+        follow: (pk) => followUser(ep, cookie, pk, candidates.find((c) => c.targetId === pk).handle),
+        describe,
+      });
+      return;
+    }
 
     if (mode === 'follow-likers') {
       const media = await recentMedia(cookie, myId, posts);

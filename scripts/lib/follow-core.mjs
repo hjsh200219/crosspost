@@ -1,4 +1,4 @@
-// Channel-agnostic core for the auto-follow tools (follow-back / follow-likers).
+// Channel-agnostic core for the auto-follow tools (follow-back / follow-likers / explore).
 //
 // A channel script (scripts/<channel>/follow.mjs) owns the platform calls — auth, listing
 // followers/following/likers, the actual follow write — and hands candidates to runFollows()
@@ -91,24 +91,50 @@ export function recordFollow(channel, entry) {
   writeFileSync(p, `${JSON.stringify(ledger, null, 2)}\n`);
 }
 
-function usage() {
+/** Default cap for explore, deliberately far below the other modes'.
+ *
+ *  follow-back and follow-likers act on people who already reached for you, and in practice they
+ *  produce single-digit candidate counts. Explore is cold outreach into somebody else's audience
+ *  and produces hundreds. The cap is close to the only thing standing between a typo and a few
+ *  hundred unsolicited follows, so it starts at 3 and is raised deliberately. */
+export const EXPLORE_MAX_DEFAULT = 3;
+
+function usage(explore) {
   console.error(
-    'usage: node follow.mjs (--follow-back|--follow-likers) [--dry-run] [--max N] ' +
-    '[--delay-min S] [--delay-max S] [--posts N]',
+    `usage: node follow.mjs (--follow-back|--follow-likers${explore ? '|--follow-explore' : ''}) ` +
+    '[--dry-run] [--max N] [--delay-min S] [--delay-max S] [--posts N]' +
+    (explore
+      ? '\n       explore only: [--seed <account> …] [--seed-side following|followers] ' +
+        '[--min-followers N] [--max-followers N]'
+      : ''),
   );
 }
 
 /** Parse the shared auto-follow flags out of process.argv (full argv — this slices the first
- *  two itself). `defaults` lets a high-risk channel lower its own cap and lengthen its delay. */
+ *  two itself). `defaults` lets a high-risk channel lower its own cap and lengthen its delay,
+ *  and `defaults.explore` opts the channel into the explore mode.
+ *
+ *  A channel that has not implemented explore must REJECT `--follow-explore` rather than ignore
+ *  it: most channel main()s are shaped `if (mode === 'follow-back') … else …likers`, so an
+ *  unrecognised mode would silently run the liker path. Refusing here makes the failure of a
+ *  forgotten opt-in "clear refusal", not "different action". */
 export function parseFollowArgs(argv, defaults = {}) {
   const a = argv.slice(2);
-  const wantsBack = a.includes('--follow-back');
-  const wantsLikers = a.includes('--follow-likers');
-  if (wantsBack === wantsLikers) { // neither or both given — exactly one is required
-    usage();
+  const supportsExplore = defaults.explore === true;
+  const wants = [
+    ['follow-back', a.includes('--follow-back')],
+    ['follow-likers', a.includes('--follow-likers')],
+    ['explore', a.includes('--follow-explore')],
+  ].filter(([, on]) => on).map(([m]) => m);
+  if (wants.length === 1 && wants[0] === 'explore' && !supportsExplore) {
+    console.error('this channel does not implement --follow-explore (no way to read an arbitrary account\'s follower/following list).');
     process.exit(1);
   }
-  const mode = wantsBack ? 'follow-back' : 'follow-likers';
+  if (wants.length !== 1) { // neither or several given — exactly one is required
+    usage(supportsExplore);
+    process.exit(1);
+  }
+  const mode = wants[0];
   const dryRun = a.includes('--dry-run');
   const numFlag = (flag, def) => {
     const i = a.indexOf(flag);
@@ -116,16 +142,29 @@ export function parseFollowArgs(argv, defaults = {}) {
     const v = Number(a[i + 1]);
     return Number.isFinite(v) ? v : def;
   };
+  const strFlags = (flag) => {
+    const out = [];
+    for (let i = 0; i < a.length; i++) if (a[i] === flag && a[i + 1] && !a[i + 1].startsWith('--')) out.push(a[i + 1]);
+    return out;
+  };
   const delayMin = numFlag('--delay-min', defaults.delayMin ?? 30);
+  const maxDefault = mode === 'explore'
+    ? Math.min(defaults.max ?? EXPLORE_MAX_DEFAULT, EXPLORE_MAX_DEFAULT)
+    : (defaults.max ?? 15);
   return {
     mode,
     dryRun,
-    max: numFlag('--max', defaults.max ?? 15),
+    max: numFlag('--max', maxDefault),
     delayMin,
     // Clamp: passing only `--delay-min` on a channel whose default max is lower would invert the
     // range, and an inverted range collapses the wait to zero — the opposite of what was asked.
     delayMax: Math.max(delayMin, numFlag('--delay-max', defaults.delayMax ?? 90)),
     posts: numFlag('--posts', defaults.posts ?? 10),
+    // explore only
+    seeds: strFlags('--seed'),
+    seedSide: strFlags('--seed-side')[0] || null,
+    minFollowers: numFlag('--min-followers', 30),
+    maxFollowers: numFlag('--max-followers', 50000),
   };
 }
 
@@ -173,6 +212,12 @@ export async function runFollows({ channel, candidates, via, dryRun, max, delayM
     `via=${via} candidates=${candidates.length} after-dedup=${deduped.length} ` +
     `skipped(dedup)=${skippedDedup} capped=${capped} batch=${batch.length} dry=${dryRun}`,
   );
+  // The cap is bounded coverage, and a number inside a one-line summary reads as "handled".
+  // Explore in particular routinely discards hundreds of candidates per run, and a reader who
+  // does not notice will think the pool is exhausted when it has barely been touched.
+  if (capped > 0) {
+    console.error(`  !! ${capped} candidate(s) left untouched by --max ${max} — this run covered ${batch.length} of ${deduped.length}.`);
+  }
 
   let followed = 0;
   let stopped = false;
