@@ -14,13 +14,13 @@
 
 ## 브라우저 의존은 2채널로 줄었다 (2026-07-27)
 
-원본에서 이식했다. **LinkedIn 통계·네이버 통계·네이버 발행**이 세션 쿠키 기반 HTTP로 돌아간다 — LinkedIn 분석 페이지는 SSR이고, 네이버의 cross-origin 벽은 CORS라 서버에는 없으며, SmartEditor ONE은 엔드포인트 4개 위의 얇은 클라이언트다(`scripts/naver-blog/http-publish.mjs`). 남은 브라우저 용도는 **브런치**와 **Facebook 조회수 스크레이프**, 그리고 쿠키 최초 캡처·만료 재캡처뿐이다.
+원본에서 이식했다. **LinkedIn 통계·네이버 통계·네이버 발행**이 세션 쿠키 기반 HTTP로 돌아간다 — LinkedIn 분석 페이지는 SSR이고, 네이버의 cross-origin 벽은 CORS라 서버에는 없으며, SmartEditor ONE은 엔드포인트 4개 위의 얇은 클라이언트다(`scripts/naver-blog/http-publish.mjs`). 남은 브라우저 용도는 **브런치**와 **Facebook 조회수 스크레이프**, 쿠키 최초 캡처·만료 재캡처, 그리고 **IG 카드/릴스 프레임 렌더**다(`gen-cards.mjs`가 playwright chromium으로 오버플로를 실측한다). 릴스가 기본이 된 뒤로 IG는 발행마다 헤드리스 브라우저와 ffmpeg를 탄다 — 헤딩의 '2채널'은 발행·통계 세션 경로를 말하는 것이지 브라우저를 안 띄운다는 뜻이 아니다.
 
 원본에서 실측·검증한 것(같은 정본을 UI판/HTTP판으로 발행해 36/36 컴포넌트·본문 불일치 0)을 옮긴 것이라 **이 repo에서는 라이브 검증을 못 했다.** `~/.crosspost/.env`를 갖춘 환경에서 `--private`로 한 번 내보고 문서를 대조한 뒤 삭제하는 절차를 권한다.
 
 ## Instagram은 다른 7채널과 근본이 다르다 (2026-07-27 신설)
 
-**텍스트 발행이 불가하고, API가 바이너리 업로드를 안 받는다** — Meta가 `image_url`/`video_url`을 **공개 URL에서 페치**한다. 그래서 이 채널만 호스팅 전제가 붙는다(`CROSSPOST_MEDIA_BASE_URL`). 카드가 없으면 텍스트로 폴백하지 않고 큰 소리로 실패한다.
+**텍스트 발행이 불가하고, API가 바이너리 업로드를 안 받는다** — Meta가 `image_url`/`video_url`을 **공개 URL에서 페치**한다. 그래서 이 채널만 호스팅 전제가 붙는다(`CROSSPOST_MEDIA_BASE_URL`). 미디어(기본은 릴스 `reel.mp4`, 캐러셀은 `card-NN.jpg`)가 없으면 텍스트로 폴백하지 않고 큰 소리로 실패한다.
 
 원본(shconsulting)의 카드 생성기는 SH 디자인 시스템·insights 토픽에 묶여 있어 **그대로 옮기지 않았다.** 엔지니어링 교훈만 가져오고 브랜드는 걷어낸 범용판이다:
 - 테마는 중립 기본값 + `$CROSSPOST_HOME/cards.theme.json` 오버라이드. **렌더 시 네트워크 요청 없음**(웹폰트 미사용) — 오프라인에서도 같은 결과
@@ -37,17 +37,23 @@
 - **안전장치를 문서가 아니라 코드에 둔다.** 원본(shconsulting)은 위험 게이트가 SKILL 오케스트레이션 산문에만 있었다. 배포본은 `parseFollowArgs(argv, defaults)`가 채널별 보수적 기본값(LinkedIn `--max 5`·60~180초, Meta 3종 `--max 3`·90~300초)을 강제하고 비-dry 실행마다 `warnRealRun()`이 경고를 찍는다. 남이 쓰는 도구는 프롬프트를 안 읽는다고 가정할 것.
 - **장부 상태는 넷이다** — `followed`(성립) · `failed`(재시도 가능) · `unconfirmed`(썼는데 확인 못 함, 사람이 확인·자동 재시도 없음) · `blocked`(플랫폼 확정 거부, 후보에서 영구 제외). **`followed`만 팔로우다** — 나머지를 집계에 넣으면 건수가 부풀려진다. 손상된 장부는 fail-closed(빈 걸로 읽으면 이미 팔로우한 사람에게 재발사).
 - **DOM 라벨은 번역 금지.** 브런치 팔로우/팔로잉, FB 팔로우/팔로우 취소·확인, IG 팔로우, Threads 액션행 라벨은 실제 UI 문자열이라 번역하면 클릭이 깨진다. 전부 env override로 뺐다(`*_LABEL`, `FACEBOOK_FRIEND_REQUESTS_HEADING`).
-- **한 채널의 두 모드는 순차.** 장부 파일과 세션을 공유하고, IG는 두 모드가 동시에 두드리면 **조회만으로도** 레이트 리밋을 건다. 채널이 다르면 병렬 OK.
-- **브런치 라이커만 Python 사이드카**(`likeit_users.py`). 그 엔드포인트는 curl_cffi 기본 전송만 200이고 **스텔스 impersonation을 켜면 오히려 401**이다. 이 저장소의 유일한 Node 밖 프로세스이자 유일한 선택적 외부 의존(`pip3 install curl_cffi`) — 미설치는 fail-fast하고 follow-back에는 영향 없다.
+- **한 채널의 여러 모드는 순차.** 장부 파일과 세션을 공유하고, IG는 두 모드가 동시에 두드리면 **조회만으로도** 레이트 리밋을 건다. 채널이 다르면 병렬 OK. 모드가 셋이 된 뒤에도 같다(explore는 `/publish follow` 일괄 밖이라 3중 동시 실행이 실제로 생기지는 않는다).
+- **브런치 라이커만 Python 사이드카**(`likeit_users.py`). 그 엔드포인트는 curl_cffi 기본 전송만 200이고 **스텔스 impersonation을 켜면 오히려 401**이다. 유일한 Python 의존(`pip3 install curl_cffi`)이고 미설치는 fail-fast, follow-back에는 영향 없다. **단 외부 바이너리 의존이 이것 하나라고 읽지 말 것** — 릴스가 기본이 되면서 `gen-reel.mjs`의 `ffmpeg`(+`lib/mp4.mjs`의 `ffprobe`)가 IG 기본 경로의 **필수** 의존이 됐고, 그 밖에 macOS `sips`가 x·브런치 이미지 변환에 쓰인다.
 - **친구 요청 수락(`facebook/accept-requests.mjs`)은 follow-core에 안 섞는다.** 친구는 상호 동의 관계라 일방 팔로우와 다르고, follow-core의 "모드 정확히 하나" 계약에도 안 맞는다. 자체 최소 러너를 유지한다.
 - **dry-run은 읽기 전용이지만 실계정을 읽는다.** CDP 세션이 살아 있으면 `--dry-run`도 실제 팔로워·요청 목록을 조회한다(LinkedIn은 세션 쿠키를 `.env`에 캡처·영속까지 한다). 검증용 격리 홈을 쓰더라도 그 홈에 실세션 쿠키가 남으므로 끝나면 지울 것.
 
 ## 릴스가 기본, 카드 예산은 장당 합산 (2026-08-07 상류 이식)
 
-**IG 기본 포맷을 릴스로 뒤집었다.** `gen-cards.mjs`·`check-cards.mjs`·`post-api.mjs` 셋이 같은
-규칙으로 푼다 — **명시 플래그 → 스펙의 `format` → 기본값 릴스**. 스펙을 중간에 넣은 이유는
+**IG 기본 포맷을 릴스로 뒤집었다.** 단 **해석 주체가 둘로 갈린다** — `gen-cards.mjs`·`check-cards.mjs`는
+**명시 플래그 → 스펙의 `format` → 기본값 릴스**로 풀지만, `post-api.mjs`는 **스펙을 아예 안 읽고**
+`--carousel` 유무로만 가른다(그 파일에 `cards/` 참조가 0건이다). 렌더·게이트에 스펙을 끼운 이유는
 기존 캐러셀을 재렌더할 때 조용히 릴스로 뒤집히지 않게 하기 위해서다(프레임 크기·세이프존이
 다르고 IG는 발행 후 교체가 불가하다). 캐러셀은 `--carousel`로 남아 있다.
+
+**그래서 `"format": "carousel"` 스펙은 렌더·게이트를 캐러셀로 통과한 뒤 `--carousel` 없이 발행하면
+릴스로 해석된다.** 결과가 안전한 건 스펙 해석이 아니라 **미디어 게이트** 덕이다 — 릴스인데 이미지가
+잡히면 확장자로 걸러 `--carousel`을 안내한다. 이 방어가 어디 있는지 헷갈리면 게이트를 지우고
+"스펙이 막아 준다"고 착각하게 된다.
 
 - **`post-api.mjs`에 포맷/미디어 불일치 게이트를 뒀다.** 기본이 릴스가 되면서 이미지를 넘긴
   호출이 REELS 컨테이너로 갈 수 있는데, 그때 Meta가 주는 에러는 URL을 가리켜 **깨진 이미지처럼
@@ -110,7 +116,7 @@ follow-back·follow-likers는 이미 나에게 반응한 사람이라 후보가 
 
 ## 사용자 상태는 전부 `~/.crosspost`
 
-`CROSSPOST_HOME` — `.env`(자격증명)·`voice.md`·`posts/`·`ledgers/`·`browser-profile/`. 플러그인 설치본은 업데이트 시 교체되는 캐시 복사본이므로 상태를 그 안에 두면 안 된다.
+`CROSSPOST_HOME` — `.env`(자격증명)·`voice.md`·`posts/`·`ledgers/`·`browser-profile/`·`follow-seeds.json`(explore 씨앗)·`cards.theme.json`(카드 테마 오버라이드)·`cards/`(카드 스펙)·`build/`(중간 프레임)·`media/`(발행용 `reel.mp4`/`card-NN.jpg`). 플러그인 설치본은 업데이트 시 교체되는 캐시 복사본이므로 상태를 그 안에 두면 안 된다.
 
 ## 배포 시 주의
 
